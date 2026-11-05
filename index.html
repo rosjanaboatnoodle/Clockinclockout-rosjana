@@ -35,6 +35,8 @@
   h1{ margin: 4px 0; font-size: 22px; color:#fff; }
   .langSelect{ border:none; background:rgba(255,255,255,.22); color:#fff; font-weight:900; font-size:13px; padding:9px 8px; border-radius:999px; }
   .langSelect option{ color:#111827; }
+  .topRight{ display:flex; align-items:center; gap:8px; }
+  .gearBtn{ display:flex; align-items:center; justify-content:center; background:rgba(255,255,255,.22); color:#fff; font-size:17px; width:36px; height:36px; border-radius:50%; text-decoration:none; flex:none; }
   .clock{ color:#fff; font-weight:900; font-size:34px; letter-spacing:1px; margin-top:6px; }
   .date{ color:rgba(255,255,255,.9); font-weight:800; font-size:14px; margin-bottom:12px; }
   .branchBar{ display:flex; align-items:center; gap:8px; margin-bottom:12px; }
@@ -99,6 +101,7 @@
   <div class="panel">
     <div class="topbar">
       <h1 data-t="title">ตอกบัตรเข้า-ออกงาน</h1>
+      <div class="topRight">
       <select class="langSelect" id="langSelect" onchange="setLang(this.value)" aria-label="Language">
         <option value="th">ไทย</option>
         <option value="en">English</option>
@@ -107,6 +110,8 @@
         <option value="km">ខ្មែរ</option>
         <option value="vi">Tiếng Việt</option>
       </select>
+      <a class="gearBtn" href="admin.html" title="แอดมิน" aria-label="Admin">⚙️</a>
+      </div>
     </div>
     <div class="clock" id="clock">--:--</div>
     <div class="date" id="dateText"></div>
