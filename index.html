@@ -93,6 +93,29 @@
   .gps.bad{ background:#fee2e2; color:#991b1b; }
   .photoBox{ margin-top:10px; display:flex; align-items:center; gap:10px; }
   .photoBtn{ border:none; border-radius:12px; padding:11px 12px; font-weight:900; font-size:14px; background:#ede9fe; color:#4c1d95; cursor:pointer; flex:1; }
+  .weekRow{ display:flex; gap:10px; align-items:flex-start; padding:7px 0; border-bottom:1px dashed rgba(29,43,106,.12); }
+  .weekRow:last-child{ border-bottom:none; }
+  .weekRow.today .weekDay{ color:#4338ca; }
+  .weekDay{ flex:0 0 96px; font-weight:900; font-size:13.5px; color:var(--ink); }
+  .weekItems{ display:flex; gap:5px; flex-wrap:wrap; flex:1; min-width:0; }
+  .tag{ color:#fff; font-size:12px; font-weight:900; border-radius:999px; padding:2px 9px; max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .weekNone{ color:var(--muted); font-weight:800; font-size:13px; }
+  .linkBtn{ border:none; background:#fff; color:#4338ca; font-weight:900; font-size:13px; border-radius:999px; padding:7px 12px; cursor:pointer; }
+  .cardHead{ display:flex; justify-content:space-between; align-items:center; gap:8px; margin-bottom:6px; }
+  .cardHead .cardTitle{ margin:0; }
+  .monthBar{ display:flex; justify-content:space-between; align-items:center; margin:6px 0 8px; }
+  .monthBar button{ border:none; background:#0f172a; color:#fff; font-weight:900; border-radius:999px; width:38px; height:34px; cursor:pointer; }
+  .monthName{ font-weight:900; color:#0f172a; }
+  .mGrid{ display:grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap:4px; }
+  .mDow{ text-align:center; font-size:11px; font-weight:900; color:#6b7280; }
+  .mDay{ background:#f1f5f9; border-radius:8px; min-height:50px; padding:4px 3px; cursor:pointer; display:flex; flex-direction:column; gap:2px; border:2px solid transparent; }
+  .mDay.empty{ background:transparent; cursor:default; }
+  .mDay.isToday{ border-color:#0f172a; }
+  .mDay.sel{ background:#e0e7ff; }
+  .mNum{ font-size:12px; font-weight:900; color:#0f172a; }
+  .mDots{ display:flex; gap:2px; flex-wrap:wrap; }
+  .mDot{ width:8px; height:8px; border-radius:50%; }
+  .mDetail{ margin-top:10px; }
   .myBtn{ border:none; border-radius:12px; padding:11px 12px; font-weight:900; font-size:14px; background:#fef3c7; color:#92400e; cursor:pointer; width:100%; margin-top:10px; }
   .myBox{ margin-top:10px; background:#f8fafc; border-radius:12px; padding:10px; }
   .myStats{ display:grid; grid-template-columns: repeat(2, 1fr); gap:6px; margin:6px 0; }
@@ -144,6 +167,14 @@
       <div class="msgList" id="msgList"></div>
     </div>
 
+    <div class="card" id="weekCard" style="display:none;">
+      <div class="cardHead">
+        <div class="cardTitle" data-t="weekTitle">📅 ตารางงาน 7 วัน</div>
+        <button class="linkBtn" onclick="openMonth()" data-t="seeMonth">ดูทั้งเดือน</button>
+      </div>
+      <div id="weekList"></div>
+    </div>
+
     <div class="card">
       <div class="cardTitle" data-t="staffTitle">พนักงาน</div>
       <div class="cardHint" data-t="staffHint">กดที่ชื่อของคุณ แล้วใส่ PIN</div>
@@ -174,11 +205,27 @@
     </div>
     <div class="result" id="punchResult"></div>
     <div class="msgList" id="punchMsgs" style="margin-top:10px;"></div>
+    <div class="myBox" id="dutyBox" style="display:none;"></div>
     <button class="myBtn" onclick="openMy()" data-t="myButton">💵 เบิกเงิน / ดูยอดของฉัน</button>
     <div class="myBox" id="myBox" style="display:none;"></div>
     <button class="btn btnClose" onclick="closePunch()" data-t="close">ปิด</button>
     <div class="fine" data-t="fineprint">* ระบบบันทึกเวลาตามเวลาของร้าน พนักงานแก้เวลาเองไม่ได้</div>
     <div class="fine" id="privacyNote" data-t="privacy" style="display:none;">ระบบเก็บตำแหน่งและรูปถ่ายตอนตอกบัตร เพื่อยืนยันการเข้างานเท่านั้น</div>
+  </div>
+</div>
+
+<div class="overlay" id="monthOverlay">
+  <div class="modal">
+    <div class="modalTitle" data-t="monthTitle">📅 ตารางงานทั้งเดือน</div>
+    <div class="monthBar">
+      <button onclick="shiftMonth(-1)" aria-label="previous">‹</button>
+      <div class="monthName" id="monthName"></div>
+      <button onclick="shiftMonth(1)" aria-label="next">›</button>
+    </div>
+    <div class="mGrid" id="mGrid"></div>
+    <div class="modalSub" style="margin-top:8px;" data-t="tapDay">กดที่วันเพื่อดูรายละเอียด</div>
+    <div class="msgList mDetail" id="mDetail"></div>
+    <button class="btn btnClose" onclick="closeMonth()" data-t="close">ปิด</button>
   </div>
 </div>
 
@@ -200,6 +247,7 @@
   let branchId = "";
   let punches = [];    // today's shifts
   let messages = [];   // today's calendar messages
+  let week = null;     // next 7 days from the calendar (null = no calendar app)
   let current = null;  // person in the PIN window
   let busy = false;
 
@@ -332,6 +380,7 @@
     if (j && j.ok){
       punches = j.punches || [];
       messages = j.messages || [];
+      week = j.week === undefined ? null : j.week;
       renderAll();
     }
   }
@@ -341,6 +390,7 @@
     document.getElementById("msgCard").style.display = messages.length ? "" : "none";
     renderPills();
     renderHistory();
+    renderWeek();
   }
 
   // forName: highlight duties of this person (staff.name)
@@ -418,6 +468,7 @@
     document.getElementById("privacyNote").style.display = (needGps || b.require_photo) ? "" : "none";
     clearPhoto();
     document.getElementById("myBox").style.display = "none";
+    document.getElementById("dutyBox").style.display = "none";
     if (needGps) startGps(b);
     document.getElementById("punchOverlay").classList.add("show");
     setTimeout(() => document.getElementById("pinInput").focus(), 50);
@@ -567,8 +618,9 @@
     punches = j.punches || punches;
     messages = j.messages || messages;
     renderAll();
-    // หลังเข้างาน โชว์ข้อความของวันนี้ ไฮไลต์เวรของคนนี้
+    // หลังเข้างาน โชว์ข้อความของวันนี้ ไฮไลต์เวรของคนนี้ และเวรที่จะถึง
     if (type === "in") renderMessages(document.getElementById("punchMsgs"), messages, j.staff_name);
+    renderDuties(j.my_duties);
   }
 
 
@@ -588,6 +640,7 @@
     const j = await api({ action: "my_summary", branch: branchId, staff_id: current.id, pin, lang });
     if (!j || !j.ok){ setResult(errorText(j), "err"); return; }
     renderMy(j, pin);
+    renderDuties(j.my_duties);
   }
 
   function renderMy(j, pin){
@@ -641,6 +694,126 @@
       const m2 = document.querySelector("#myBox .result");
       if (m2){ m2.textContent = r.status === "approved" ? t("reqApproved") : t("reqPending"); m2.className = "result ok"; }
     };
+  }
+
+
+  // ---------- ตารางงาน (จากปฏิทิน ดูอย่างเดียว) ----------
+
+  function dayLabel(d){
+    const today = shopToday();
+    if (d === today) return t("todayLabel");
+    if (d === plusDays(today, 1)) return t("tomorrowLabel");
+    try{ return new Intl.DateTimeFormat(LOCALE[lang], { weekday: "short", day: "numeric", month: "short" }).format(new Date(d + "T00:00:00")); }
+    catch(e){ return d; }
+  }
+  function shopToday(){
+    try{ return new Intl.DateTimeFormat("en-CA", tzOpt({ year: "numeric", month: "2-digit", day: "2-digit" })).format(new Date()); }
+    catch(e){ return new Date().toISOString().slice(0, 10); }
+  }
+  function plusDays(d, n){ return new Date(Date.parse(d + "T00:00:00Z") + n * 86400000).toISOString().slice(0, 10); }
+  function tagText(i){ return i.kind === "person" ? (i.short ? i.short + " " : "") + labelOf(i.person || "") : (i.short || i.name); }
+  function addTag(box, i){ const g = el("span", "tag", tagText(i)); g.style.background = i.color || "#8b5cf6"; g.title = i.message || i.name; box.appendChild(g); }
+
+  function renderWeek(){
+    const card = document.getElementById("weekCard");
+    if (week === null){ card.style.display = "none"; return; }
+    card.style.display = "";
+    const box = document.getElementById("weekList");
+    box.innerHTML = "";
+    const today = shopToday();
+    const byDate = {};
+    week.forEach(d => { byDate[d.date] = d.items; });
+    for (let n = 0; n < 7; n++){
+      const d = plusDays(today, n);
+      const row = el("div", "weekRow" + (n === 0 ? " today" : ""));
+      row.appendChild(el("div", "weekDay", dayLabel(d)));
+      const items = el("div", "weekItems");
+      const list = byDate[d] || [];
+      if (!list.length) items.appendChild(el("span", "weekNone", t("nothingDay")));
+      list.forEach(i => addTag(items, i));
+      row.appendChild(items);
+      box.appendChild(row);
+    }
+  }
+
+  function renderDuties(list){
+    const box = document.getElementById("dutyBox");
+    if (list === null || list === undefined){ box.style.display = "none"; return; }
+    box.innerHTML = "";
+    box.style.display = "";
+    box.appendChild(el("div", "cardTitle", t("myDutiesTitle")));
+    if (!list.length){ box.appendChild(el("div", "empty", t("noDuties"))); return; }
+    list.forEach(dt => {
+      const row = el("div", "weekRow");
+      row.appendChild(el("div", "weekDay", dayLabel(dt.date)));
+      const items = el("div", "weekItems");
+      const g = el("span", "tag", dt.name); g.style.background = dt.color || "#8b5cf6";
+      items.appendChild(g);
+      row.appendChild(items);
+      box.appendChild(row);
+    });
+  }
+
+  let monthView = "";   // "YYYY-MM"
+  let monthDays = {};
+
+  function openMonth(){
+    monthView = shopToday().slice(0, 7);
+    document.getElementById("monthOverlay").classList.add("show");
+    loadMonthView();
+  }
+  function closeMonth(){ document.getElementById("monthOverlay").classList.remove("show"); }
+  function shiftMonth(n){
+    const [y, m] = monthView.split("-").map(Number);
+    const d = new Date(Date.UTC(y, m - 1 + n, 1));
+    monthView = d.toISOString().slice(0, 7);
+    loadMonthView();
+  }
+
+  async function loadMonthView(){
+    const want = monthView;
+    monthDays = {};
+    renderMonthView();
+    const j = await api({ action: "schedule_month", branch: branchId, month: monthView, lang });
+    if (want !== monthView || !j || !j.ok) return;
+    (j.days || []).forEach(d => { monthDays[d.date] = d.items; });
+    renderMonthView();
+  }
+
+  function renderMonthView(){
+    const [y, m] = monthView.split("-").map(Number);
+    try{ document.getElementById("monthName").textContent = new Intl.DateTimeFormat(LOCALE[lang], { month: "long", year: "numeric" }).format(new Date(y, m - 1, 1)); }
+    catch(e){ document.getElementById("monthName").textContent = monthView; }
+    const grid = document.getElementById("mGrid");
+    grid.innerHTML = "";
+    for (let i = 0; i < 7; i++){
+      let n = ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"][i];
+      try{ n = new Intl.DateTimeFormat(LOCALE[lang], { weekday: "narrow" }).format(new Date(2023, 0, 1 + i)); } catch(e){}
+      grid.appendChild(el("div", "mDow", n));
+    }
+    const first = new Date(Date.UTC(y, m - 1, 1)).getUTCDay();
+    const dim = new Date(Date.UTC(y, m, 0)).getUTCDate();
+    for (let i = 0; i < first; i++) grid.appendChild(el("div", "mDay empty"));
+    const today = shopToday();
+    for (let d = 1; d <= dim; d++){
+      const key = monthView + "-" + String(d).padStart(2, "0");
+      const cell = el("div", "mDay" + (key === today ? " isToday" : ""));
+      cell.appendChild(el("div", "mNum", d));
+      const dots = el("div", "mDots");
+      (monthDays[key] || []).forEach(i => { const dot = el("span", "mDot"); dot.style.background = i.color || "#8b5cf6"; dots.appendChild(dot); });
+      cell.appendChild(dots);
+      cell.onclick = () => {
+        grid.querySelectorAll(".mDay.sel").forEach(c => c.classList.remove("sel"));
+        cell.classList.add("sel");
+        const det = document.getElementById("mDetail");
+        const list = monthDays[key] || [];
+        renderMessages(det, list, null); // ล้างกล่องแล้วใส่ข้อความของวันนั้น
+        det.insertBefore(el("div", "cardTitle", dayLabel(key)), det.firstChild);
+        if (!list.length) det.appendChild(el("div", "empty", t("nothingDay")));
+      };
+      grid.appendChild(cell);
+    }
+    document.getElementById("mDetail").innerHTML = "";
   }
 
   // ข้อมูลวันนี้อัปเดตเองเป็นระยะ และเมื่อกลับมาเปิดหน้านี้

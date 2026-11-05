@@ -452,31 +452,69 @@ async function todayPunches(branchId: string): Promise<Punch[]> {
   return [...byId.values()].sort((a, b) => a.check_in.localeCompare(b.check_in));
 }
 
-// Calendar messages for a branch and date in one language. Empty if the calendar isn't installed.
-async function calendarMessages(branchId: string, date: string, lang: Lang) {
+type CalItem = { topic_id: string; color: string; kind: string; person: string | null; name: string; short: string; message: string };
+
+// Calendar days (from the calendar app's tables) for a branch between two dates, in one language.
+// null = the calendar isn't installed in this project (the page then hides the schedule).
+async function calendarRange(branchId: string, from: string, to: string, lang: Lang): Promise<Array<{ date: string; items: CalItem[] }> | null> {
   try {
     const [{ data: entries, error: e1 }, { data: topics, error: e2 }] = await Promise.all([
-      supabase.from("schedule_entries").select("topic_id, person").eq("branch_id", branchId).eq("date", date),
+      supabase.from("schedule_entries").select("date, topic_id, person").eq("branch_id", branchId).gte("date", from).lte("date", to).order("date"),
       supabase.from("topics").select("id, color, kind, sort").eq("active", true).order("sort"),
     ]);
-    if (e1 || e2 || !entries?.length) return [];
+    if (e1 || e2) return null;
+    if (!entries?.length) return [];
     const rows = await getTranslations(undefined, "topic.");
     const text = (key: string) => { const r = rows.find((x) => x.key === key); return r ? (r[lang] || r.th || "") : ""; };
-    const out = [];
+    const byDate = new Map<string, CalItem[]>();
     for (const t of topics ?? []) {
       for (const e of entries.filter((x) => x.topic_id === t.id)) {
-        const fill = (s: string) => s.split("{name}").join(e.person ?? "");
-        out.push({
-          topic_id: t.id, color: t.color, person: e.person ?? null,
-          name: text(`topic.${t.id}.name`),
+        const fill = (v: string) => v.split("{name}").join(e.person ?? "");
+        const list = byDate.get(e.date) ?? [];
+        list.push({
+          topic_id: t.id, color: t.color, kind: t.kind, person: e.person ?? null,
+          name: text(`topic.${t.id}.name`), short: text(`topic.${t.id}.short`),
           message: fill(text(`topic.${t.id}.message`) || text(`topic.${t.id}.name`)),
         });
+        byDate.set(e.date, list);
       }
     }
-    return out;
+    return [...byDate.entries()].sort().map(([date, items]) => ({ date, items }));
   } catch {
-    return [];
+    return null;
   }
+}
+
+// Today's calendar messages (flat list), empty if none or no calendar.
+async function calendarMessages(branchId: string, date: string, lang: Lang) {
+  const days = await calendarRange(branchId, date, date, lang);
+  return (days?.[0]?.items ?? []).map((m) => ({ topic_id: m.topic_id, color: m.color, person: m.person, name: m.name, message: m.message }));
+}
+
+// The next N days (today included) for the schedule card. null = no calendar.
+async function calendarWeek(branchId: string, lang: Lang, days = 7) {
+  const today = localDate(new Date());
+  return calendarRange(branchId, today, addDays(today, days - 1), lang);
+}
+
+// One person's duties ("pick a person" topics naming them) over the next 14 days.
+async function myDuties(branchId: string, staffName: string, lang: Lang) {
+  const today = localDate(new Date());
+  const days = await calendarRange(branchId, today, addDays(today, 13), lang);
+  if (!days) return null;
+  return days.flatMap((d) => d.items.filter((i) => i.kind === "person" && i.person === staffName)
+    .map((i) => ({ date: d.date, topic_id: i.topic_id, color: i.color, name: i.name, message: i.message })));
+}
+
+// Public, read-only: a whole month of the calendar for the staff page.
+async function handleScheduleMonth(p: Record<string, unknown>) {
+  const branchId = String(p.branch ?? "");
+  const month = String(p.month ?? "");
+  if (!branchId || !/^\d{4}-\d{2}$/.test(month)) return json({ ok: false, error: "bad_month" });
+  const [y, m] = month.split("-").map(Number);
+  const last = `${month}-${String(daysInMonth(y, m)).padStart(2, "0")}`;
+  const days = await calendarRange(branchId, `${month}-01`, last, cleanLang(p.lang));
+  return json({ ok: true, available: days !== null, today: localDate(new Date()), days: days ?? [] });
 }
 
 // Public: today's list and today's calendar messages for the branch.
@@ -484,11 +522,12 @@ async function handleToday(p: Record<string, unknown>) {
   const branchId = String(p.branch ?? "");
   if (!branchId) return json({ ok: false, error: "missing_branch" });
   const lang = cleanLang(p.lang);
-  const [punches, messages] = await Promise.all([
+  const [punches, messages, week] = await Promise.all([
     todayPunches(branchId),
     calendarMessages(branchId, localDate(new Date()), lang),
+    calendarWeek(branchId, lang),
   ]);
-  return json({ ok: true, date: localDate(new Date()), punches: punches.map(publicPunch), messages });
+  return json({ ok: true, date: localDate(new Date()), punches: punches.map(publicPunch), messages, week });
 }
 
 function publicPunch(r: Punch) {
@@ -616,13 +655,14 @@ async function handlePunch(p: Record<string, unknown>) {
   }
   const distance = loc.distance;
 
-  const [punches, messages] = await Promise.all([
+  const [punches, messages, duties] = await Promise.all([
     todayPunches(branchId),
     calendarMessages(branchId, localDate(now), lang),
+    myDuties(branchId, person.name, lang),
   ]);
   return json({
     ok: true, status, punch: publicPunch(punch), staff_name: person.name, distance,
-    punches: punches.map(publicPunch), messages,
+    punches: punches.map(publicPunch), messages, my_duties: duties,
   });
 }
 
@@ -1320,9 +1360,10 @@ async function staffByPin(p: Record<string, unknown>): Promise<{ s: StaffFull; b
 async function handleMySummary(p: Record<string, unknown>) {
   const who = await staffByPin(p);
   if (typeof who === "string") return json({ ok: false, error: who });
-  const sum = await staffPeriodSummary(who.b, who.s);
+  const [sum, duties] = await Promise.all([staffPeriodSummary(who.b, who.s), myDuties(who.b.id, who.s.name, cleanLang(p.lang))]);
   return json({
     ok: true,
+    my_duties: duties,
     staff_advance: who.b.staff_advance,
     period: { start: sum.period.start, end: sum.period.end },
     days_worked: sum.totals.days_worked,
@@ -1358,6 +1399,7 @@ const ACTIONS: Record<string, (p: Record<string, unknown>) => Promise<Response>>
   bootstrap: handleBootstrap,
   today: handleToday,
   punch: handlePunch,
+  schedule_month: handleScheduleMonth,
   setup: handleSetup,
   check_admin_pin: handleCheckAdminPin,
   change_admin_pin: handleChangeAdminPin,
