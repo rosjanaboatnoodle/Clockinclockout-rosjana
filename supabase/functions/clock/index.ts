@@ -1,6 +1,6 @@
 // Edge Function "clock" — ระบบตอกบัตร (ใช้ Supabase project เดียวกับปฏิทินได้ หรือใช้เดี่ยวๆ ก็ได้)
 //
-// Database: run supabase/migrations/0001_clock.sql, then 0002_gps_photo.sql (photos bucket).
+// Database: run supabase/migrations/0001_clock.sql, 0002_gps_photo.sql, 0003_pay.sql in order.
 // Deploy: Supabase Dashboard -> Edge Functions -> create function named "clock" ->
 // paste this file's contents -> Deploy -> แท็บ Settings -> ปิด "Verify JWT with legacy secret"
 //
@@ -327,6 +327,7 @@ async function handleBootstrap(p: Record<string, unknown>) {
   return json({
     ok: true,
     lang,
+    tz: shopTz(),
     has_admin: await hasAdmin(),
     branches: (branches ?? []).map((b) => ({
       ...b,
@@ -647,7 +648,8 @@ async function handlePunchesRange(p: Record<string, unknown>) {
   return json({
     ok: true,
     punches: rows.map((r) => ({
-      ...r,
+      ...withLocal(r as PunchRow),
+      flags: flagsOf(r as PunchRow),
       in_photo_url: r.in_photo ? urls.get(String(r.in_photo)) ?? null : null,
       out_photo_url: r.out_photo ? urls.get(String(r.out_photo)) ?? null : null,
     })),
@@ -703,6 +705,652 @@ async function handleSaveBranchSettings(p: Record<string, unknown>) {
 }
 
 // ============================================================
+// Dates in the shop's time zone
+// ============================================================
+
+function tzOffsetMs(ts: number, tz: string): number {
+  const parts = Object.fromEntries(new Intl.DateTimeFormat("en-US", {
+    timeZone: tz, hourCycle: "h23", year: "numeric", month: "2-digit", day: "2-digit",
+    hour: "2-digit", minute: "2-digit", second: "2-digit",
+  }).formatToParts(new Date(ts)).map((p) => [p.type, p.value]));
+  const asUtc = Date.UTC(+parts.year, +parts.month - 1, +parts.day, +parts.hour % 24, +parts.minute, +parts.second);
+  return asUtc - Math.floor(ts / 1000) * 1000;
+}
+
+// "YYYY-MM-DDTHH:MM" in the shop's time zone -> Date
+function localToUtc(local: string): Date | null {
+  const m = /^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})/.exec(local);
+  if (!m) return null;
+  const guess = Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5]);
+  let ts = guess - tzOffsetMs(guess, shopTz());
+  ts = guess - tzOffsetMs(ts, shopTz()); // second pass handles daylight-saving edges
+  return new Date(ts);
+}
+
+// Date -> "YYYY-MM-DDTHH:MM" in the shop's time zone
+function utcToLocal(iso: string | null): string | null {
+  if (!iso) return null;
+  const ts = Date.parse(iso);
+  return new Date(ts + tzOffsetMs(ts, shopTz())).toISOString().slice(0, 16);
+}
+
+// Plain calendar-date maths on "YYYY-MM-DD"
+function dayNum(d: string): number { return Math.round(Date.parse(d + "T00:00:00Z") / 86400000); }
+function dayStr(n: number): string { return new Date(n * 86400000).toISOString().slice(0, 10); }
+function addDays(d: string, n: number): string { return dayStr(dayNum(d) + n); }
+function daysInMonth(y: number, m: number): number { return new Date(Date.UTC(y, m, 0)).getUTCDate(); } // m: 1-12
+
+// ============================================================
+// Pay periods (รอบตัดบิล)
+//   monthly      { cut_day }               cut_day 31 = end of month
+//   semimonthly  { first_end }             1..first_end, first_end+1..end of month
+//   weekly       { every, end_weekday, anchor }  end_weekday 0=Sun..6=Sat, periods end on/after anchor
+//   days         { every, anchor }         every N days starting at anchor
+// Stored as history [{ from, cfg }]; a change applies from the next period.
+// ============================================================
+
+type PeriodCfg = { type: string; cut_day?: number; first_end?: number; every?: number; end_weekday?: number; anchor?: string };
+type PeriodHist = Array<{ from: string; cfg: PeriodCfg }>;
+const DEFAULT_PERIOD: PeriodCfg = { type: "monthly", cut_day: 31 };
+
+function cleanPeriodCfg(raw: Record<string, unknown>): PeriodCfg | null {
+  const int = (v: unknown, lo: number, hi: number) => { const n = Math.round(Number(v)); return Number.isFinite(n) && n >= lo && n <= hi ? n : null; };
+  const type = String(raw.type ?? "");
+  if (type === "monthly") { const c = int(raw.cut_day, 1, 31); return c ? { type, cut_day: c } : null; }
+  if (type === "semimonthly") { const f = int(raw.first_end, 1, 27); return f ? { type, first_end: f } : null; }
+  const anchor = String(raw.anchor ?? "");
+  if (!isIsoDate(anchor)) return null;
+  if (type === "weekly") {
+    const e = int(raw.every, 1, 8), w = int(raw.end_weekday, 0, 6);
+    return e !== null && w !== null ? { type, every: e, end_weekday: w, anchor } : null;
+  }
+  if (type === "days") { const e = int(raw.every, 1, 120); return e ? { type, every: e, anchor } : null; }
+  return null;
+}
+
+// The natural period of `cfg` that contains date d.
+function naturalPeriod(cfg: PeriodCfg, d: string): { start: string; end: string } {
+  const [y, m, day] = d.split("-").map(Number);
+  if (cfg.type === "semimonthly") {
+    const f = cfg.first_end as number, dim = daysInMonth(y, m);
+    const mm = String(m).padStart(2, "0");
+    return day <= f ? { start: `${y}-${mm}-01`, end: `${y}-${mm}-${String(f).padStart(2, "0")}` }
+      : { start: `${y}-${mm}-${String(f + 1).padStart(2, "0")}`, end: `${y}-${mm}-${String(dim).padStart(2, "0")}` };
+  }
+  if (cfg.type === "weekly") {
+    const len = 7 * (cfg.every as number);
+    const a = dayNum(cfg.anchor as string);
+    const aWeekday = new Date(a * 86400000).getUTCDay();
+    const firstEnd = a + ((cfg.end_weekday as number) - aWeekday + 7) % 7;
+    const k = Math.ceil((dayNum(d) - firstEnd) / len);
+    const end = firstEnd + k * len;
+    return { start: dayStr(end - len + 1), end: dayStr(end) };
+  }
+  if (cfg.type === "days") {
+    const n = cfg.every as number, a = dayNum(cfg.anchor as string);
+    const start = a + Math.floor((dayNum(d) - a) / n) * n;
+    return { start: dayStr(start), end: dayStr(start + n - 1) };
+  }
+  // monthly
+  const cut = cfg.cut_day ?? 31;
+  const endOf = (yy: number, mo: number) => { // mo may be 0 or 13
+    const dt = new Date(Date.UTC(yy, mo - 1, 1));
+    const Y = dt.getUTCFullYear(), M = dt.getUTCMonth() + 1;
+    return `${Y}-${String(M).padStart(2, "0")}-${String(Math.min(cut, daysInMonth(Y, M))).padStart(2, "0")}`;
+  };
+  const thisEnd = endOf(y, m);
+  if (d <= thisEnd) return { start: addDays(endOf(y, m - 1), 1), end: thisEnd };
+  return { start: addDays(thisEnd, 1), end: endOf(y, m + 1) };
+}
+
+function periodFor(hist: PeriodHist | null | undefined, d: string): { start: string; end: string; cfg: PeriodCfg } {
+  const list = (hist ?? []).filter((h) => h && h.cfg && isIsoDate(h.from)).sort((a, b) => a.from.localeCompare(b.from));
+  let idx = -1;
+  for (let i = 0; i < list.length; i++) if (list[i].from <= d) idx = i;
+  const cfg = idx >= 0 ? list[idx].cfg : (list[0]?.cfg ?? DEFAULT_PERIOD);
+  let { start, end } = naturalPeriod(cfg, d);
+  if (idx >= 0 && start < list[idx].from) start = list[idx].from;
+  const next = list[idx + 1];
+  if (next && next.from <= end) end = addDays(next.from, -1);
+  return { start, end, cfg };
+}
+
+// ============================================================
+// Pay rules (ค่าแรง / โอที)
+// ============================================================
+
+type Pay = {
+  pay_type: "daily" | "hourly"; daily_rate: number; hourly_rate: number;
+  std_hours: number; half_day_hours: number; min_day_hours: number;
+  ot_mode: "none" | "after_hours" | "after_time" | "both"; ot_after_hours: number; ot_after_time: string;
+  ot_rate_type: "multiplier" | "fixed"; ot_multiplier: number; ot_fixed_rate: number;
+  ot_round_min: number; ot_min_min: number;
+};
+
+const PAY_DEFAULTS: Pay = {
+  pay_type: "daily", daily_rate: 0, hourly_rate: 0,
+  std_hours: 8, half_day_hours: 4, min_day_hours: 2,
+  ot_mode: "none", ot_after_hours: 8, ot_after_time: "20:00",
+  ot_rate_type: "multiplier", ot_multiplier: 1.5, ot_fixed_rate: 0,
+  ot_round_min: 15, ot_min_min: 30,
+};
+
+const PAY_FIELDS: Record<string, { kind: "num" | "enum" | "time"; min?: number; max?: number; values?: string[] }> = {
+  pay_type: { kind: "enum", values: ["daily", "hourly"] },
+  daily_rate: { kind: "num", min: 0, max: 100000 },
+  hourly_rate: { kind: "num", min: 0, max: 10000 },
+  std_hours: { kind: "num", min: 1, max: 24 },
+  half_day_hours: { kind: "num", min: 0, max: 24 },
+  min_day_hours: { kind: "num", min: 0, max: 24 },
+  ot_mode: { kind: "enum", values: ["none", "after_hours", "after_time", "both"] },
+  ot_after_hours: { kind: "num", min: 0, max: 24 },
+  ot_after_time: { kind: "time" },
+  ot_rate_type: { kind: "enum", values: ["multiplier", "fixed"] },
+  ot_multiplier: { kind: "num", min: 0, max: 10 },
+  ot_fixed_rate: { kind: "num", min: 0, max: 10000 },
+  ot_round_min: { kind: "num", min: 1, max: 120 },
+  ot_min_min: { kind: "num", min: 0, max: 600 },
+};
+
+// Keeps only known fields with valid values. Empty string / null = "not set" (inherit).
+function cleanPay(raw: Record<string, unknown>): { pay: Record<string, unknown>; bad: string[] } {
+  const pay: Record<string, unknown> = {};
+  const bad: string[] = [];
+  for (const [k, rule] of Object.entries(PAY_FIELDS)) {
+    const v = raw?.[k];
+    if (v === undefined || v === null || v === "") continue;
+    if (rule.kind === "num") {
+      const n = Number(v);
+      if (!Number.isFinite(n) || n < (rule.min as number) || n > (rule.max as number)) bad.push(k); else pay[k] = n;
+    } else if (rule.kind === "enum") {
+      if (!(rule.values as string[]).includes(String(v))) bad.push(k); else pay[k] = String(v);
+    } else {
+      const m = /^(\d{1,2}):(\d{2})$/.exec(String(v));
+      if (!m || +m[1] > 23 || +m[2] > 59) bad.push(k); else pay[k] = `${m[1].padStart(2, "0")}:${m[2]}`;
+    }
+  }
+  return { pay, bad };
+}
+
+function effectivePay(branchDefaults: unknown, staffPay: unknown): Pay {
+  return { ...PAY_DEFAULTS, ...(branchDefaults as object ?? {}), ...(staffPay as object ?? {}) } as Pay;
+}
+
+const round2 = (n: number) => Math.round(n * 100) / 100;
+
+type PunchRow = Punch & { day_override: number | null; ot_override_min: number | null; review_ok: boolean; created_by: string };
+
+// One person's day: worked minutes, day fraction, OT minutes and money.
+function computeDay(rules: Pay, shifts: PunchRow[], date: string) {
+  const closed = shifts.filter((s) => s.check_out);
+  const worked = closed.reduce((m, s) => m + Math.max(0, (Date.parse(s.check_out as string) - Date.parse(s.check_in)) / 60000), 0);
+  const workedMin = Math.floor(worked);
+  const hours = workedMin / 60;
+
+  // OT before rounding
+  let otRaw = 0;
+  const afterHours = Math.max(0, workedMin - rules.ot_after_hours * 60);
+  let afterTime = 0;
+  const threshold = localToUtc(`${date}T${rules.ot_after_time}`)?.getTime() ?? Infinity;
+  for (const s of closed) {
+    const a = Date.parse(s.check_in), b = Date.parse(s.check_out as string);
+    afterTime += Math.max(0, (b - Math.max(a, threshold)) / 60000);
+  }
+  if (rules.ot_mode === "after_hours") otRaw = afterHours;
+  else if (rules.ot_mode === "after_time") otRaw = afterTime;
+  else if (rules.ot_mode === "both") otRaw = Math.max(afterHours, afterTime); // same minutes are never paid twice
+  let otAuto = Math.floor(otRaw / rules.ot_round_min) * rules.ot_round_min;
+  if (otAuto < rules.ot_min_min) otAuto = 0;
+  const overrides = shifts.filter((s) => s.ot_override_min !== null && s.ot_override_min !== undefined);
+  const otMin = overrides.length ? overrides.reduce((m, s) => m + Number(s.ot_override_min), 0) : otAuto;
+
+  // Day fraction (daily pay)
+  let dayAuto = 0;
+  if (workedMin > 0) dayAuto = hours < rules.min_day_hours ? 0 : hours < rules.half_day_hours ? 0.5 : 1;
+  const dayOverride = shifts.find((s) => s.day_override !== null && s.day_override !== undefined)?.day_override;
+  const day = dayOverride !== undefined && dayOverride !== null ? Number(dayOverride) : dayAuto;
+
+  const baseHourly = rules.pay_type === "hourly" ? rules.hourly_rate : rules.daily_rate / rules.std_hours;
+  const otRate = rules.ot_rate_type === "fixed" ? rules.ot_fixed_rate : baseHourly * rules.ot_multiplier;
+  let base: number;
+  if (rules.pay_type === "hourly") base = Math.max(0, workedMin - otMin) / 60 * rules.hourly_rate;
+  else base = day * rules.daily_rate;
+  const otPay = otMin / 60 * otRate;
+
+  return {
+    date, worked_min: workedMin, day: rules.pay_type === "hourly" ? (workedMin > 0 ? 1 : 0) : day, day_auto: dayAuto,
+    ot_min: otMin, ot_auto_min: otAuto, ot_rate: round2(otRate),
+    base: round2(base), ot_pay: round2(otPay), open: shifts.some((s) => !s.check_out && !s.forgot_out),
+  };
+}
+
+// ============================================================
+// Review flags (กล่อง "ต้องตรวจ")
+// ============================================================
+
+const LONG_SHIFT_HOURS = 14;
+const SHORT_SHIFT_MIN = 5;
+
+function flagsOf(r: PunchRow): string[] {
+  if (r.review_ok) return [];
+  const f: string[] = [];
+  if (r.forgot_out) f.push("forgot_out");
+  else if (!r.check_out && Date.now() - Date.parse(r.check_in) > FORGOT_OUT_HOURS * 3600000) f.push("still_open");
+  if (r.check_out) {
+    const min = (Date.parse(r.check_out) - Date.parse(r.check_in)) / 60000;
+    if (min > LONG_SHIFT_HOURS * 60) f.push("long");
+    if (min < SHORT_SHIFT_MIN) f.push("short");
+  }
+  return f;
+}
+
+// ============================================================
+// Locks: a period that has been billed (step 4) can't be edited until unlocked.
+// ============================================================
+
+async function isLocked(staffId: number, date: string): Promise<boolean> {
+  const { data } = await supabase.from("pay_closures").select("id")
+    .eq("staff_id", staffId).lte("period_start", date).gte("period_end", date).limit(1);
+  return !!(data && data.length);
+}
+
+// ============================================================
+// Person + branch loading
+// ============================================================
+
+type StaffFull = { id: number; branch_id: string; name: string; label: string; active: boolean; pay: Record<string, unknown>; period: PeriodHist | null; pin_hash?: string | null };
+type BranchFull = { id: string; name: string; pay_defaults: Record<string, unknown>; period: PeriodHist; staff_advance: boolean; advance_auto_max: number };
+
+async function loadBranch(id: string): Promise<BranchFull | null> {
+  const { data } = await supabase.from("branches").select("id, name, pay_defaults, period, staff_advance, advance_auto_max").eq("id", id).maybeSingle();
+  return (data as BranchFull) ?? null;
+}
+
+function staffPeriodHist(b: BranchFull, s: StaffFull): PeriodHist {
+  return (s.period && s.period.length) ? s.period : (b.period ?? []);
+}
+
+// Period totals for one person. `date` picks the period (default today).
+async function staffPeriodSummary(b: BranchFull, s: StaffFull, date?: string) {
+  const d = date && isIsoDate(date) ? date : localDate(new Date());
+  const per = periodFor(staffPeriodHist(b, s), d);
+  const rules = effectivePay(b.pay_defaults, s.pay);
+  const [{ data: punches }, { data: adv }, locked] = await Promise.all([
+    supabase.from("punches").select("*").eq("staff_id", s.id).gte("work_date", per.start).lte("work_date", per.end).order("check_in"),
+    supabase.from("advances").select("*").eq("staff_id", s.id).gte("date", per.start).lte("date", per.end).order("date"),
+    isLocked(s.id, per.start),
+  ]);
+  const byDate = new Map<string, PunchRow[]>();
+  for (const p of (punches ?? []) as PunchRow[]) {
+    const list = byDate.get(p.work_date) ?? [];
+    list.push(p);
+    byDate.set(p.work_date, list);
+  }
+  const days = [...byDate.entries()].sort().map(([dt, list]) => computeDay(rules, list, dt));
+  const approved = (adv ?? []).filter((a) => a.status === "approved");
+  const pending = (adv ?? []).filter((a) => a.status === "pending");
+  const sum = (arr: Array<Record<string, unknown>>, k: string) => round2(arr.reduce((m, x) => m + Number(x[k] || 0), 0));
+  const base = sum(days, "base"), otPay = sum(days, "ot_pay"), advTotal = sum(approved, "amount");
+  const today = localDate(new Date());
+  const lastCounted = per.end < today ? per.end : today;
+  const calendarDays = lastCounted >= per.start ? dayNum(lastCounted) - dayNum(per.start) + 1 : 0;
+  const daysWorked = days.reduce((m, x) => m + x.day, 0);
+  return {
+    staff_id: s.id, name: s.name, label: s.label || s.name, pay_type: rules.pay_type,
+    period: { start: per.start, end: per.end, cfg: per.cfg }, locked,
+    totals: {
+      days_worked: daysWorked,
+      days_with_punch: days.filter((x) => x.worked_min > 0).length,
+      days_off: Math.max(0, calendarDays - days.filter((x) => x.worked_min > 0).length),
+      worked_hours: round2(days.reduce((m, x) => m + x.worked_min, 0) / 60),
+      ot_hours: round2(days.reduce((m, x) => m + x.ot_min, 0) / 60),
+      base, ot_pay: otPay, gross: round2(base + otPay),
+      advances: advTotal, pending: sum(pending, "amount"), net: round2(base + otPay - advTotal),
+    },
+    days,
+    advances: (adv ?? []).filter((a) => a.status !== "rejected"),
+  };
+}
+
+// ============================================================
+// Admin: pay settings and periods
+// ============================================================
+
+async function handleSavePayDefaults(p: Record<string, unknown>) {
+  if (!(await checkAdminPin(String(p.admin_pin ?? "")))) return json({ ok: false, error: "wrong_admin_pin" });
+  const { pay, bad } = cleanPay((p.pay ?? {}) as Record<string, unknown>);
+  if (bad.length) return json({ ok: false, error: "bad_pay", fields: bad });
+  const row: Record<string, unknown> = { pay_defaults: pay };
+  if (p.staff_advance !== undefined) row.staff_advance = !!p.staff_advance;
+  if (p.advance_auto_max !== undefined) {
+    const n = Number(p.advance_auto_max);
+    if (!Number.isFinite(n) || n < 0 || n > 100000) return json({ ok: false, error: "bad_pay", fields: ["advance_auto_max"] });
+    row.advance_auto_max = n;
+  }
+  const { error } = await supabase.from("branches").update(row).eq("id", String(p.branch_id ?? ""));
+  if (error) return json({ ok: false, error: error.message });
+  await logAdmin("save_pay_defaults", { branch_id: p.branch_id, ...row });
+  return json({ ok: true });
+}
+
+async function handleSaveStaffPay(p: Record<string, unknown>) {
+  if (!(await checkAdminPin(String(p.admin_pin ?? "")))) return json({ ok: false, error: "wrong_admin_pin" });
+  const { pay, bad } = cleanPay((p.pay ?? {}) as Record<string, unknown>);
+  if (bad.length) return json({ ok: false, error: "bad_pay", fields: bad });
+  const { error } = await supabase.from("staff").update({ pay }).eq("id", Number(p.staff_id) || 0);
+  if (error) return json({ ok: false, error: error.message });
+  await logAdmin("save_staff_pay", { staff_id: p.staff_id, pay });
+  return json({ ok: true });
+}
+
+// New period settings. Before anything has been billed they apply right away; after that, from
+// the start of the next period, so the period in progress never changes.
+async function newPeriodHist(current: PeriodHist, cfg: PeriodCfg, billed: boolean): Promise<PeriodHist> {
+  if (!billed) return [{ from: "2000-01-01", cfg }];
+  const now = periodFor(current, localDate(new Date()));
+  const from = addDays(now.end, 1);
+  return [...current.filter((h) => h.from < from), { from, cfg }];
+}
+
+async function handleSavePeriod(p: Record<string, unknown>) {
+  if (!(await checkAdminPin(String(p.admin_pin ?? "")))) return json({ ok: false, error: "wrong_admin_pin" });
+  const staffId = Number(p.staff_id) || 0;
+  const useBranch = staffId && p.cfg === null;
+  const cfg = useBranch ? null : cleanPeriodCfg((p.cfg ?? {}) as Record<string, unknown>);
+  if (!useBranch && !cfg) return json({ ok: false, error: "bad_period" });
+  if (staffId) {
+    const { data: s } = await supabase.from("staff").select("id, branch_id, period").eq("id", staffId).maybeSingle();
+    if (!s) return json({ ok: false, error: "unknown_staff" });
+    if (useBranch) {
+      await supabase.from("staff").update({ period: null }).eq("id", staffId);
+    } else {
+      const b = await loadBranch(s.branch_id);
+      const { data: closed } = await supabase.from("pay_closures").select("id").eq("staff_id", staffId).limit(1);
+      const current = (s.period && s.period.length) ? s.period : (b?.period ?? []);
+      await supabase.from("staff").update({ period: await newPeriodHist(current, cfg as PeriodCfg, !!closed?.length) }).eq("id", staffId);
+    }
+  } else {
+    const b = await loadBranch(String(p.branch_id ?? ""));
+    if (!b) return json({ ok: false, error: "unknown_branch" });
+    const { data: closed } = await supabase.from("pay_closures").select("id").eq("branch_id", b.id).limit(1);
+    await supabase.from("branches").update({ period: await newPeriodHist(b.period ?? [], cfg as PeriodCfg, !!closed?.length) }).eq("id", b.id);
+  }
+  await logAdmin("save_period", { branch_id: p.branch_id, staff_id: staffId || null, cfg });
+  return json({ ok: true });
+}
+
+// Everything the admin "pay" screens need for a branch: defaults, period now/next, each person's settings.
+async function handlePaySettings(p: Record<string, unknown>) {
+  if (!(await checkAdminPin(String(p.admin_pin ?? "")))) return json({ ok: false, error: "wrong_admin_pin" });
+  const b = await loadBranch(String(p.branch_id ?? ""));
+  if (!b) return json({ ok: false, error: "unknown_branch" });
+  const { data: staff } = await supabase.from("staff").select("id, name, label, active, pay, period")
+    .eq("branch_id", b.id).order("sort").order("name");
+  const today = localDate(new Date());
+  const show = (hist: PeriodHist) => {
+    const now = periodFor(hist, today);
+    const next = periodFor(hist, addDays(now.end, 1));
+    return { now, next };
+  };
+  return json({
+    ok: true,
+    system_defaults: PAY_DEFAULTS,
+    branch: { id: b.id, pay_defaults: b.pay_defaults ?? {}, staff_advance: b.staff_advance, advance_auto_max: Number(b.advance_auto_max) },
+    branch_period: { hist: b.period ?? [], ...show(b.period ?? []) },
+    staff: (staff ?? []).map((s) => ({
+      id: s.id, name: s.name, label: s.label || s.name, active: s.active, pay: s.pay ?? {},
+      own_period: !!(s.period && s.period.length),
+      period: show((s.period && s.period.length) ? s.period : (b.period ?? [])),
+    })),
+  });
+}
+
+// Live totals of the current (or `date`) period for everyone active in a branch.
+async function handlePaySummary(p: Record<string, unknown>) {
+  if (!(await checkAdminPin(String(p.admin_pin ?? "")))) return json({ ok: false, error: "wrong_admin_pin" });
+  const b = await loadBranch(String(p.branch_id ?? ""));
+  if (!b) return json({ ok: false, error: "unknown_branch" });
+  let q = supabase.from("staff").select("id, branch_id, name, label, active, pay, period").eq("branch_id", b.id);
+  if (p.staff_id) q = q.eq("id", Number(p.staff_id)); else q = q.eq("active", true);
+  const { data: staff } = await q.order("sort").order("name");
+  const people = await Promise.all(((staff ?? []) as StaffFull[]).map((s) => staffPeriodSummary(b, s, String(p.date ?? ""))));
+  return json({ ok: true, people });
+}
+
+// ============================================================
+// Admin: fix shifts by hand
+// ============================================================
+
+// Shifts that need a look: forgot to clock out, still open too long, very long or very short.
+async function handleReviewList(p: Record<string, unknown>) {
+  if (!(await checkAdminPin(String(p.admin_pin ?? "")))) return json({ ok: false, error: "wrong_admin_pin" });
+  const branchId = String(p.branch_id ?? "");
+  const since = addDays(localDate(new Date()), -62);
+  const { data } = await supabase.from("punches").select("*")
+    .eq("branch_id", branchId).gte("work_date", since).eq("review_ok", false).order("check_in");
+  const items = ((data ?? []) as PunchRow[]).map((r) => ({ ...withLocal(r), flags: flagsOf(r) })).filter((r) => r.flags.length);
+  const { data: pend } = await supabase.from("advances").select("id").eq("branch_id", branchId).eq("status", "pending");
+  return json({ ok: true, items, pending_advances: (pend ?? []).length });
+}
+
+function withLocal(r: PunchRow) {
+  return { ...r, check_in_local: utcToLocal(r.check_in), check_out_local: utcToLocal(r.check_out) };
+}
+
+function readShiftInput(p: Record<string, unknown>): { in: Date; out: Date | null } | string {
+  const inAt = localToUtc(String(p.check_in ?? ""));
+  if (!inAt) return "bad_time";
+  const outRaw = String(p.check_out ?? "");
+  const outAt = outRaw ? localToUtc(outRaw) : null;
+  if (outRaw && !outAt) return "bad_time";
+  if (outAt && outAt.getTime() <= inAt.getTime()) return "out_before_in";
+  if (outAt && outAt.getTime() - inAt.getTime() > 24 * 3600000) return "too_long";
+  if (inAt.getTime() > Date.now() + 5 * 60000) return "in_future";
+  return { in: inAt, out: outAt };
+}
+
+function readOverrides(p: Record<string, unknown>): Record<string, unknown> | string {
+  const out: Record<string, unknown> = {};
+  if (p.day_override !== undefined) {
+    const v = p.day_override === "" || p.day_override === null ? null : Number(p.day_override);
+    if (v !== null && ![0, 0.5, 1].includes(v)) return "bad_day";
+    out.day_override = v;
+  }
+  if (p.ot_override_min !== undefined) {
+    const v = p.ot_override_min === "" || p.ot_override_min === null ? null : Math.round(Number(p.ot_override_min));
+    if (v !== null && (!Number.isFinite(v) || v < 0 || v > 1440)) return "bad_ot";
+    out.ot_override_min = v;
+  }
+  return out;
+}
+
+// Edit one shift (times in shop local "YYYY-MM-DDTHH:MM"), or just mark it as checked (review_ok only).
+async function handleEditPunch(p: Record<string, unknown>) {
+  if (!(await checkAdminPin(String(p.admin_pin ?? "")))) return json({ ok: false, error: "wrong_admin_pin" });
+  const { data: row } = await supabase.from("punches").select("*").eq("id", Number(p.id) || 0).maybeSingle();
+  if (!row) return json({ ok: false, error: "not_found" });
+  if (await isLocked(row.staff_id, row.work_date)) return json({ ok: false, error: "locked" });
+  const upd: Record<string, unknown> = { updated_at: new Date().toISOString() };
+  if (p.only_review) {
+    upd.review_ok = true;
+  } else {
+    const t = readShiftInput(p);
+    if (typeof t === "string") return json({ ok: false, error: t });
+    const o = readOverrides(p);
+    if (typeof o === "string") return json({ ok: false, error: o });
+    const workDate = localDate(t.in);
+    if (workDate !== row.work_date && await isLocked(row.staff_id, workDate)) return json({ ok: false, error: "locked" });
+    Object.assign(upd, o, {
+      check_in: t.in.toISOString(), check_out: t.out ? t.out.toISOString() : null, work_date: workDate,
+      forgot_out: false, edited: true, review_ok: true, note: String(p.note ?? row.note ?? "").slice(0, 300),
+    });
+  }
+  const { error } = await supabase.from("punches").update(upd).eq("id", row.id);
+  if (error) {
+    const dup = error.code === "23505" || String(error.message).includes("duplicate");
+    return json({ ok: false, error: dup ? "open_exists" : error.message });
+  }
+  await logAdmin("edit_punch", { id: row.id, before: { in: row.check_in, out: row.check_out }, after: upd });
+  return json({ ok: true });
+}
+
+// Add a shift by hand (forgot to clock in, system was down, ...).
+async function handleAddPunch(p: Record<string, unknown>) {
+  if (!(await checkAdminPin(String(p.admin_pin ?? "")))) return json({ ok: false, error: "wrong_admin_pin" });
+  const { data: s } = await supabase.from("staff").select("id, branch_id").eq("id", Number(p.staff_id) || 0).maybeSingle();
+  if (!s) return json({ ok: false, error: "unknown_staff" });
+  const t = readShiftInput(p);
+  if (typeof t === "string") return json({ ok: false, error: t });
+  if (!t.out) return json({ ok: false, error: "need_out" });
+  const o = readOverrides(p);
+  if (typeof o === "string") return json({ ok: false, error: o });
+  const workDate = localDate(t.in);
+  if (await isLocked(s.id, workDate)) return json({ ok: false, error: "locked" });
+  const { data, error } = await supabase.from("punches").insert({
+    ...o, branch_id: s.branch_id, staff_id: s.id, work_date: workDate,
+    check_in: t.in.toISOString(), check_out: t.out.toISOString(),
+    edited: true, review_ok: true, created_by: "admin", note: String(p.note ?? "").slice(0, 300),
+  }).select("id").maybeSingle();
+  if (error) return json({ ok: false, error: error.message });
+  await logAdmin("add_punch", { id: data?.id, staff_id: s.id, in: t.in, out: t.out });
+  return json({ ok: true, id: data?.id });
+}
+
+async function handleDeletePunch(p: Record<string, unknown>) {
+  if (!(await checkAdminPin(String(p.admin_pin ?? "")))) return json({ ok: false, error: "wrong_admin_pin" });
+  const { data: row } = await supabase.from("punches").select("*").eq("id", Number(p.id) || 0).maybeSingle();
+  if (!row) return json({ ok: false, error: "not_found" });
+  if (await isLocked(row.staff_id, row.work_date)) return json({ ok: false, error: "locked" });
+  const { error } = await supabase.from("punches").delete().eq("id", row.id);
+  if (error) return json({ ok: false, error: error.message });
+  const photos = [row.in_photo, row.out_photo].filter(Boolean);
+  if (photos.length) await supabase.storage.from(PHOTO_BUCKET).remove(photos);
+  await logAdmin("delete_punch", { row });
+  return json({ ok: true });
+}
+
+// ============================================================
+// Advances (เบิกเงิน): admin records (approved at once) or staff request (pending, or
+// approved at once when not more than the branch's auto-approve amount).
+// ============================================================
+
+function readAmount(v: unknown): number | null {
+  const n = round2(Number(v));
+  return Number.isFinite(n) && n > 0 && n <= 100000 ? n : null;
+}
+
+async function handleAddAdvance(p: Record<string, unknown>) {
+  if (!(await checkAdminPin(String(p.admin_pin ?? "")))) return json({ ok: false, error: "wrong_admin_pin" });
+  const { data: s } = await supabase.from("staff").select("id, branch_id").eq("id", Number(p.staff_id) || 0).maybeSingle();
+  if (!s) return json({ ok: false, error: "unknown_staff" });
+  const amount = readAmount(p.amount);
+  if (!amount) return json({ ok: false, error: "bad_amount" });
+  const date = isIsoDate(String(p.date ?? "")) ? String(p.date) : localDate(new Date());
+  if (await isLocked(s.id, date)) return json({ ok: false, error: "locked" });
+  if (!p.force) {
+    // The person already asked for money that day: ask the admin before adding a second entry.
+    const { data: pend } = await supabase.from("advances").select("id, amount, item, date")
+      .eq("staff_id", s.id).eq("date", date).eq("status", "pending");
+    if (pend && pend.length) return json({ ok: false, error: "pending_exists", pending: pend });
+  }
+  const { data, error } = await supabase.from("advances").insert({
+    branch_id: s.branch_id, staff_id: s.id, date, amount, item: String(p.item ?? "").trim().slice(0, 100),
+    status: "approved", created_by: "admin", decided_at: new Date().toISOString(),
+  }).select("id").maybeSingle();
+  if (error) return json({ ok: false, error: error.message });
+  await logAdmin("add_advance", { id: data?.id, staff_id: s.id, amount, date });
+  return json({ ok: true, id: data?.id });
+}
+
+async function handleDecideAdvance(p: Record<string, unknown>) {
+  if (!(await checkAdminPin(String(p.admin_pin ?? "")))) return json({ ok: false, error: "wrong_admin_pin" });
+  const status = p.approve ? "approved" : "rejected";
+  const { data: a } = await supabase.from("advances").select("*").eq("id", Number(p.id) || 0).maybeSingle();
+  if (!a) return json({ ok: false, error: "not_found" });
+  if (await isLocked(a.staff_id, a.date)) return json({ ok: false, error: "locked" });
+  const { error } = await supabase.from("advances").update({ status, decided_at: new Date().toISOString() }).eq("id", a.id);
+  if (error) return json({ ok: false, error: error.message });
+  await logAdmin("decide_advance", { id: a.id, status });
+  return json({ ok: true });
+}
+
+async function handleDeleteAdvance(p: Record<string, unknown>) {
+  if (!(await checkAdminPin(String(p.admin_pin ?? "")))) return json({ ok: false, error: "wrong_admin_pin" });
+  const { data: a } = await supabase.from("advances").select("*").eq("id", Number(p.id) || 0).maybeSingle();
+  if (!a) return json({ ok: false, error: "not_found" });
+  if (await isLocked(a.staff_id, a.date)) return json({ ok: false, error: "locked" });
+  await supabase.from("advances").delete().eq("id", a.id);
+  await logAdmin("delete_advance", { advance: a });
+  return json({ ok: true });
+}
+
+async function handleListAdvances(p: Record<string, unknown>) {
+  if (!(await checkAdminPin(String(p.admin_pin ?? "")))) return json({ ok: false, error: "wrong_admin_pin" });
+  const branchId = String(p.branch_id ?? "");
+  const from = String(p.from ?? ""), to = String(p.to ?? "");
+  let q = supabase.from("advances").select("*").eq("branch_id", branchId);
+  if (isIsoDate(from)) q = q.gte("date", from);
+  if (isIsoDate(to)) q = q.lte("date", to);
+  const [{ data, error }, { data: pend }] = await Promise.all([
+    q.order("date").order("created_at"),
+    supabase.from("advances").select("*").eq("branch_id", branchId).eq("status", "pending").order("created_at"),
+  ]);
+  if (error) return json({ ok: false, error: error.message });
+  return json({ ok: true, advances: data ?? [], pending: pend ?? [] });
+}
+
+// ============================================================
+// Staff self-service (with the person's own PIN)
+// ============================================================
+
+async function staffByPin(p: Record<string, unknown>): Promise<{ s: StaffFull; b: BranchFull } | string> {
+  const pin = String(p.pin ?? "").trim();
+  if (!/^\d{4,6}$/.test(pin)) return "pin_invalid";
+  const { data: s } = await supabase.from("staff").select("id, branch_id, name, label, active, pay, period, pin_hash")
+    .eq("id", Number(p.staff_id) || 0).maybeSingle();
+  if (!s || !s.active || s.branch_id !== String(p.branch ?? "")) return "unknown_staff";
+  if (!s.pin_hash) return "no_pin";
+  if (!(await checkPassword(s.pin_hash, pin))) return "wrong_pin";
+  const b = await loadBranch(s.branch_id);
+  if (!b) return "unknown_branch";
+  return { s: s as StaffFull, b };
+}
+
+// My period so far: days, OT hours, advances. No money totals (those are for the bill).
+async function handleMySummary(p: Record<string, unknown>) {
+  const who = await staffByPin(p);
+  if (typeof who === "string") return json({ ok: false, error: who });
+  const sum = await staffPeriodSummary(who.b, who.s);
+  return json({
+    ok: true,
+    staff_advance: who.b.staff_advance,
+    period: { start: sum.period.start, end: sum.period.end },
+    days_worked: sum.totals.days_worked,
+    ot_hours: sum.totals.ot_hours,
+    advances: sum.advances.map((a) => ({ id: a.id, date: a.date, amount: Number(a.amount), item: a.item, status: a.status })),
+    advances_total: sum.totals.advances,
+    pending_total: sum.totals.pending,
+  });
+}
+
+async function handleRequestAdvance(p: Record<string, unknown>) {
+  const who = await staffByPin(p);
+  if (typeof who === "string") return json({ ok: false, error: who });
+  if (!who.b.staff_advance) return json({ ok: false, error: "advance_off" });
+  const amount = readAmount(p.amount);
+  if (!amount) return json({ ok: false, error: "bad_amount" });
+  const date = localDate(new Date());
+  if (await isLocked(who.s.id, date)) return json({ ok: false, error: "locked" });
+  const auto = Number(who.b.advance_auto_max) > 0 && amount <= Number(who.b.advance_auto_max);
+  const { error } = await supabase.from("advances").insert({
+    branch_id: who.b.id, staff_id: who.s.id, date, amount, item: String(p.item ?? "").trim().slice(0, 100),
+    status: auto ? "approved" : "pending", created_by: "staff", decided_at: auto ? new Date().toISOString() : null,
+  });
+  if (error) return json({ ok: false, error: error.message });
+  return json({ ok: true, status: auto ? "approved" : "pending" });
+}
+
+// ============================================================
 // Dispatch
 // ============================================================
 
@@ -718,6 +1366,21 @@ const ACTIONS: Record<string, (p: Record<string, unknown>) => Promise<Response>>
   save_staff_member: handleSaveStaffMember,
   punches_range: handlePunchesRange,
   save_branch_settings: handleSaveBranchSettings,
+  pay_settings: handlePaySettings,
+  save_pay_defaults: handleSavePayDefaults,
+  save_staff_pay: handleSaveStaffPay,
+  save_period: handleSavePeriod,
+  pay_summary: handlePaySummary,
+  review_list: handleReviewList,
+  edit_punch: handleEditPunch,
+  add_punch: handleAddPunch,
+  delete_punch: handleDeletePunch,
+  add_advance: handleAddAdvance,
+  decide_advance: handleDecideAdvance,
+  delete_advance: handleDeleteAdvance,
+  list_advances: handleListAdvances,
+  my_summary: handleMySummary,
+  request_advance: handleRequestAdvance,
   ai_translate: handleAiTranslate,
   translate_page: handleTranslatePage,
   list_translations: handleListTranslations,

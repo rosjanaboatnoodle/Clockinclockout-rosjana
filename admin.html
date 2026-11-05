@@ -56,6 +56,37 @@
   .check{ display:flex; align-items:center; gap:8px; font-weight:800; font-size:14px; margin:6px 0; }
   .check input{ width:20px; height:20px; }
   .far{ color:#b91c1c; font-weight:900; }
+  .tab .count{ display:inline-block; min-width:18px; padding:0 5px; margin-left:4px; border-radius:999px; background:#ef4444; color:#fff; font-size:11px; line-height:18px; }
+  .reviewBox{ border:2px solid #f59e0b; background:#fffbeb; border-radius:12px; padding:10px; margin-bottom:10px; }
+  .reviewItem{ display:flex; align-items:center; justify-content:space-between; gap:8px; padding:7px 0; border-bottom:1px dashed #fde68a; flex-wrap:wrap; }
+  .reviewItem:last-child{ border-bottom:none; }
+  .flag{ font-size:12px; font-weight:900; color:#b45309; }
+  .sub{ font-size:12px; color:var(--muted); font-weight:700; }
+  .payCard{ border:1px solid #e5e7eb; border-radius:12px; padding:10px 12px; margin-bottom:8px; }
+  .payHead{ display:flex; justify-content:space-between; align-items:baseline; gap:8px; flex-wrap:wrap; }
+  .payName{ font-weight:900; font-size:15px; color:#0f172a; }
+  .payNet{ font-weight:900; font-size:18px; color:#047857; font-variant-numeric: tabular-nums; }
+  .payGrid{ display:grid; grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); gap:4px 10px; margin-top:6px; }
+  .payGrid div{ font-size:12.5px; color:#6b7280; font-weight:700; display:flex; justify-content:space-between; gap:6px; }
+  .payGrid b{ color:#111827; font-variant-numeric: tabular-nums; }
+  .payCard.total{ background:#f8fafc; }
+  .money{ text-align:right; font-variant-numeric: tabular-nums; }
+  tr.total td{ font-weight:900; border-top:2px solid #e5e7eb; }
+  .grid2{ display:grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap:8px; }
+  .fl{ display:flex; flex-direction:column; gap:3px; font-size:12.5px; font-weight:800; color:#374151; }
+  .fl .field{ width:100%; }
+  .group{ font-weight:900; font-size:13.5px; color:var(--ink); margin:10px 0 6px; }
+  .quick{ display:flex; gap:6px; flex-wrap:wrap; margin-bottom:6px; }
+  .chip{ border:1px solid #c7d2fe; background:#eef2ff; color:#3730a3; border-radius:999px; padding:6px 10px; font-weight:800; font-size:12.5px; cursor:pointer; }
+  .stat{ font-size:11px; font-weight:900; border-radius:999px; padding:2px 8px; }
+  .stat.pending{ background:#fef3c7; color:#92400e; }
+  .stat.approved{ background:#d1fae5; color:#065f46; }
+  .stat.rejected{ background:#fee2e2; color:#991b1b; }
+  .overlay{ position:fixed; inset:0; background:rgba(0,0,0,.45); display:none; align-items:center; justify-content:center; padding:16px; z-index:90; }
+  .overlay.show{ display:flex; }
+  .modal{ width:min(480px,100%); max-height:calc(100vh - 32px); overflow:auto; background:#fff; border-radius:16px; padding:16px; }
+  details.pay{ margin-top:6px; }
+  details.pay > summary{ cursor:pointer; font-weight:900; font-size:13px; color:#4c1d95; }
   .viewer{ position:fixed; inset:0; background:rgba(0,0,0,.85); display:none; align-items:center; justify-content:center; z-index:99; padding:16px; }
   .viewer.show{ display:flex; }
   .viewer img{ max-width:100%; max-height:100%; border-radius:12px; }
@@ -89,7 +120,9 @@
 
   <div id="main" class="hidden">
     <div class="tabs">
-      <button class="tab active" data-tab="punches" onclick="showTab('punches')">การตอกบัตร</button>
+      <button class="tab active" data-tab="punches" onclick="showTab('punches')">การตอกบัตร<span class="count hidden" id="reviewCount"></span></button>
+      <button class="tab" data-tab="pay" onclick="showTab('pay')">เงิน</button>
+      <button class="tab" data-tab="adv" onclick="showTab('adv')">เบิกเงิน<span class="count hidden" id="advCount"></span></button>
       <button class="tab" data-tab="staff" onclick="showTab('staff')">พนักงาน</button>
       <button class="tab" data-tab="branches" onclick="showTab('branches')">สาขา</button>
       <button class="tab" data-tab="lang" onclick="showTab('lang')">ภาษา</button>
@@ -105,15 +138,87 @@
 
     <!-- การตอกบัตร -->
     <div class="card" data-panel="punches">
+      <div class="reviewBox hidden" id="reviewBox"></div>
       <div class="cardTitle">การตอกบัตร</div>
       <div class="row">
         <input class="field" id="fromDate" type="date">
         <input class="field" id="toDate" type="date">
         <button class="btn dark" onclick="loadPunches()">ดู</button>
+        <button class="btn green" onclick="openEditor(null)">+ เพิ่มกะเอง</button>
       </div>
-      <div class="hint">แก้เวลา / เพิ่มเวลาเอง / โอที จะมาในขั้นถัดไป</div>
+      <div class="hint">กด "แก้" เพื่อแก้เวลา / ปรับวันทำงาน (เต็มวัน/ครึ่งวัน) / ปรับโอทีของวันนั้น ✏️ = แอดมินแก้แล้ว</div>
       <div class="tableWrap"><table id="punchTable"></table></div>
       <div class="status" id="punchStatus"></div>
+    </div>
+
+    <!-- เงิน -->
+    <div class="card hidden" data-panel="pay">
+      <div class="cardTitle">ยอดเงินรอบนี้ (คำนวณสด)</div>
+      <div class="row">
+        <span class="sub">ดูรอบที่มีวันที่</span>
+        <input class="field sm" style="flex:0 0 160px;" id="payDate" type="date" onchange="loadPaySummary()">
+        <button class="btn" onclick="$('payDate').value=''; loadPaySummary()">รอบนี้</button>
+      </div>
+      <div id="payCards"></div>
+      <div class="hint" style="margin-top:6px;">ตัวเลขสีเขียว = คงเหลือที่ต้องจ่าย (ค่าแรง + โอที − เบิกที่อนุมัติแล้ว) · ออกบิล/ปิดรอบ จะมาในขั้นถัดไป</div>
+      <div class="status" id="payStatus"></div>
+    </div>
+
+    <div class="card hidden" data-panel="pay">
+      <div class="cardTitle">รอบตัดบิลของสาขา</div>
+      <div class="hint" id="periodNow"></div>
+      <div id="periodBox"></div>
+      <div class="row"><button class="btn dark" onclick="saveBranchPeriod()">บันทึกรอบตัดบิล</button></div>
+      <div class="hint">ถ้ายังไม่เคยออกบิล มีผลทันที · ถ้าเคยออกบิลแล้ว มีผลตั้งแต่รอบถัดไป (รอบที่กำลังเดินไม่เปลี่ยน) · ตั้งรอบแยกรายคนได้ในแท็บพนักงาน</div>
+      <div class="status" id="periodStatus"></div>
+    </div>
+
+    <div class="card hidden" data-panel="pay">
+      <div class="cardTitle">ค่าแรงและโอที — ค่าเริ่มต้นของสาขา</div>
+      <div class="hint">ทุกคนใช้ค่านี้ ยกเว้นช่องที่ตั้งแยกรายคน (แท็บพนักงาน → 💰)</div>
+      <div id="defaultsBox"></div>
+      <div class="row"><button class="btn dark" onclick="saveDefaults()">บันทึกค่าเริ่มต้น</button></div>
+      <div class="status" id="defaultsStatus"></div>
+    </div>
+
+    <!-- เบิกเงิน -->
+    <div class="card hidden" data-panel="adv">
+      <div class="cardTitle">รออนุมัติ</div>
+      <div id="advPending"></div>
+      <div class="cardTitle" style="margin-top:12px;">บันทึกการเบิก (แอดมิน)</div>
+      <div class="row">
+        <select class="field" id="advStaffSel"></select>
+        <input class="field sm" id="advAmount" type="number" min="1" step="1" placeholder="บาท" inputmode="decimal">
+        <input class="field sm" style="flex:0 0 150px;" id="advDate" type="date">
+      </div>
+      <div class="quick" id="advQuick"></div>
+      <div class="row">
+        <input class="field" id="advItem" placeholder="รายการ เช่น เบิกเงินสด / ขนมถ้วย">
+        <button class="btn green" onclick="addAdvance(false)">บันทึก</button>
+      </div>
+      <div class="status" id="advStatus"></div>
+    </div>
+
+    <div class="card hidden" data-panel="adv">
+      <div class="cardTitle">รายการเบิก</div>
+      <div class="row">
+        <input class="field" id="advFrom" type="date">
+        <input class="field" id="advTo" type="date">
+        <button class="btn dark" onclick="loadAdvances()">ดู</button>
+      </div>
+      <div class="tableWrap"><table id="advTable"></table></div>
+    </div>
+
+    <div class="card hidden" data-panel="adv">
+      <div class="cardTitle">ตั้งค่าการเบิก</div>
+      <label class="check"><input type="checkbox" id="advAllowStaff"> ให้พนักงานขอเบิกเองในหน้าตอกบัตรได้</label>
+      <div class="row">
+        <span class="sub">อนุมัติอัตโนมัติถ้าไม่เกิน (บาท)</span>
+        <input class="field sm" id="advAutoMax" type="number" min="0" step="1">
+      </div>
+      <div class="hint">0 = ต้องกดอนุมัติทุกรายการ · เช่น ตั้ง 100 ค่าขนมไม่เกิน 100 บาทผ่านเลย ไม่ต้องกด</div>
+      <div class="row"><button class="btn dark" onclick="saveAdvSettings()">บันทึก</button></div>
+      <div class="status" id="advSetStatus"></div>
     </div>
 
     <!-- พนักงาน -->
@@ -195,6 +300,28 @@
   </div>
 </div>
 
+<div class="overlay" id="editor">
+  <div class="modal">
+    <div class="cardTitle" id="edTitle">แก้กะ</div>
+    <div class="row hidden" id="edStaffRow"><select class="field" id="edStaff"></select></div>
+    <div class="fl">เวลาเข้างาน<input class="field" id="edIn" type="datetime-local"></div>
+    <div class="fl" style="margin-top:6px;">เวลาออกงาน (ว่าง = ยังทำงานอยู่)<input class="field" id="edOut" type="datetime-local"></div>
+    <div class="grid2" style="margin-top:6px;">
+      <div class="fl">วันทำงาน (รายวัน)
+        <select class="field" id="edDay"><option value="">อัตโนมัติ</option><option value="1">เต็มวัน</option><option value="0.5">ครึ่งวัน</option><option value="0">ไม่นับ</option></select>
+      </div>
+      <div class="fl">โอที (นาที)<input class="field" id="edOt" type="number" min="0" step="15" placeholder="อัตโนมัติ"></div>
+    </div>
+    <div class="fl" style="margin-top:6px;">หมายเหตุ (แก้เพราะอะไร)<input class="field" id="edNote" maxlength="300"></div>
+    <div class="row" style="margin-top:10px;">
+      <button class="btn green" onclick="saveEditor()">บันทึก</button>
+      <button class="btn" onclick="closeEditor()">ยกเลิก</button>
+      <button class="btn" style="margin-left:auto;color:#b91c1c;" id="edDelete" onclick="deleteEditor()">ลบกะนี้</button>
+    </div>
+    <div class="status" id="edStatus"></div>
+  </div>
+</div>
+
 <div class="viewer" id="viewer" onclick="this.classList.remove('show')"><img id="viewerImg" alt=""></div>
 
 <script src="ui-text.js"></script>
@@ -214,6 +341,20 @@
     bad_location: "พิกัดไม่ถูกต้อง ใส่แบบ 13.7563, 100.5018",
     bad_radius: "รัศมีต้องอยู่ระหว่าง 5–5000 เมตร",
     location_needed: "ต้องตั้งตำแหน่งร้านก่อน ถึงจะบังคับ GPS ได้",
+    bad_time: "วันเวลาไม่ถูกต้อง",
+    out_before_in: "เวลาออกต้องหลังเวลาเข้า",
+    too_long: "กะยาวเกิน 24 ชั่วโมง",
+    in_future: "เวลาเข้างานเป็นเวลาในอนาคต",
+    need_out: "ต้องใส่เวลาออกงาน",
+    bad_day: "วันทำงานไม่ถูกต้อง",
+    bad_ot: "นาทีโอทีไม่ถูกต้อง",
+    locked: "รอบนี้ออกบิลแล้ว แก้ไม่ได้",
+    open_exists: "คนนี้มีกะที่ยังไม่ตอกออกอยู่แล้ว",
+    bad_pay: "มีค่าที่ไม่ถูกต้อง",
+    bad_period: "ตั้งรอบไม่ครบหรือไม่ถูกต้อง",
+    bad_amount: "จำนวนเงินไม่ถูกต้อง",
+    unknown_staff: "ไม่พบพนักงาน",
+    not_found: "ไม่พบรายการนี้ (อาจถูกลบไปแล้ว)",
     already_setup: "ระบบตั้งค่าไปแล้ว ใช้รหัสแอดมินเดิมเข้าสู่ระบบ",
     unknown_branch: "ไม่พบสาขา"
   };
@@ -230,7 +371,12 @@
   function ssGet(k){ try{ return sessionStorage.getItem(k) || ""; } catch(e){ return ""; } }
   function ssSet(k, v){ try{ sessionStorage.setItem(k, v); } catch(e){} }
   function localDateStr(d){ return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0"); }
-  function fmt(iso){ return iso ? new Date(iso).toLocaleString("th-TH", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", hour12: false }) : ""; }
+  let SHOP_TZ = "Asia/Bangkok"; // เขตเวลาของร้าน (จาก Supabase) แสดงเวลาตามร้านเสมอ ไม่ว่าเปิดจากเครื่องไหน
+  function fmt(iso){
+    if (!iso) return "";
+    const o = { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", hour12: false };
+    try{ return new Date(iso).toLocaleString("th-TH", Object.assign({ timeZone: SHOP_TZ }, o)); } catch(e){ return new Date(iso).toLocaleString("th-TH", o); }
+  }
   function hoursBetween(a, b){ return (Date.parse(b) - Date.parse(a)) / 3600000; }
 
   async function api(params){
@@ -250,6 +396,7 @@
     const j = await api({ action: "bootstrap", lang: "th" });
     if (!j || !j.ok){ $("loginCard").classList.remove("hidden"); setMsg("loginStatus", "เชื่อมต่อไม่สำเร็จ เช็ค PROJECT_REF / SUPABASE_KEY", false); return; }
     branches = j.branches || [];
+    if (j.tz) SHOP_TZ = j.tz;
     if (!j.has_admin){ $("setupCard").classList.remove("hidden"); return; }
     const saved = ssGet("clock_admin_pin");
     if (saved && await tryLogin(saved)) return;
@@ -307,8 +454,8 @@
     const link = new URL("index.html", location.href);
     link.searchParams.set("branch", branchId);
     $("branchLink").textContent = b ? "ลิงก์ตอกบัตรของสาขานี้: " + link.toString() : "";
-    loadStaff();
-    loadPunches();
+    // รายชื่อพนักงานต้องมาก่อน ส่วนอื่นใช้ชื่อจากรายชื่อนี้
+    loadStaff().then(() => { loadPunches(); loadReview(); loadPaySettings(); });
   }
 
   async function renameBranch(){
@@ -427,6 +574,7 @@
     };
     bottom.append(pin, badge, activeLabel, save);
     card.append(top, bottom);
+    if (s.id) card.appendChild(staffPayDetails(s));
     return card;
   }
 
@@ -450,17 +598,25 @@
     ((s && s.staff) || []).forEach(x => { names[x.id] = x.label || x.name; });
     const table = $("punchTable");
     const b = branches.find(x => x.id === branchId) || {};
-    table.innerHTML = "<tr><th>วันที่</th><th>พนักงาน</th><th>เข้า</th><th></th><th>ออก</th><th></th><th>ชั่วโมง</th></tr>";
+    table.innerHTML = "<tr><th></th><th>วันที่</th><th>พนักงาน</th><th>เข้า</th><th></th><th>ออก</th><th></th><th>ชั่วโมง</th><th>ปรับ</th></tr>";
+    lastPunches = j.punches;
     j.punches.forEach(p => {
       const tr = el("tr");
+      const edTd = el("td"); const edBtn = el("button", "btn", "แก้"); edBtn.onclick = () => openEditor(p); edTd.appendChild(edBtn);
+      tr.appendChild(edTd);
       tr.appendChild(el("td", "", p.work_date));
-      tr.appendChild(el("td", "", names[p.staff_id] || ("#" + p.staff_id)));
+      tr.appendChild(el("td", "", (names[p.staff_id] || ("#" + p.staff_id)) + (p.edited ? " ✏️" : "")));
       tr.appendChild(el("td", "", fmt(p.check_in)));
       tr.appendChild(proofCell(p.in_distance_m, p.in_accuracy_m, p.in_photo_url, b));
       const out = el("td", p.forgot_out ? "warn" : "", p.forgot_out ? "ลืมตอกออก" : (p.check_out ? fmt(p.check_out) : "กำลังทำงาน"));
       tr.appendChild(out);
       tr.appendChild(proofCell(p.out_distance_m, p.out_accuracy_m, p.out_photo_url, b));
       tr.appendChild(el("td", "", p.check_out ? hoursBetween(p.check_in, p.check_out).toFixed(2) : ""));
+      const adj = [];
+      if (p.day_override !== null && p.day_override !== undefined) adj.push(DAY_TEXT[String(p.day_override)]);
+      if (p.ot_override_min !== null && p.ot_override_min !== undefined) adj.push("โอที " + p.ot_override_min + " นาที");
+      if (p.note) adj.push(p.note);
+      tr.appendChild(el("td", "sub", adj.join(" · ")));
       table.appendChild(tr);
     });
     setMsg("punchStatus", j.punches.length ? j.punches.length + " รายการ" : "ไม่มีรายการในช่วงนี้");
@@ -482,6 +638,455 @@
       td.appendChild(sp);
     }
     return td;
+  }
+
+  // ---------- ต้องตรวจ ----------
+
+  let lastPunches = [];
+  const DAY_TEXT = { "1": "เต็มวัน", "0.5": "ครึ่งวัน", "0": "ไม่นับวัน" };
+  const FLAG_TEXT = {
+    forgot_out: "ลืมตอกออก",
+    still_open: "ยังไม่ตอกออก นานเกิน 16 ชม.",
+    long: "ทำงานยาวผิดปกติ (เกิน 14 ชม.)",
+    short: "สั้นมาก (ไม่ถึง 5 นาที) อาจกดผิด"
+  };
+
+  function staffName(id){
+    const s = staffAll.find(x => x.id === id);
+    return s ? (s.label || s.name) : "#" + id;
+  }
+
+  function setCount(id, n){
+    const c = $(id);
+    c.textContent = n;
+    c.classList.toggle("hidden", !n);
+  }
+
+  async function loadReview(){
+    if (!branchId || !adminPin) return;
+    const j = await api({ action: "review_list", admin_pin: adminPin, branch_id: branchId });
+    const box = $("reviewBox");
+    box.innerHTML = "";
+    if (!j || !j.ok) return;
+    setCount("reviewCount", j.items.length);
+    setCount("advCount", j.pending_advances);
+    box.classList.toggle("hidden", !j.items.length);
+    if (!j.items.length) return;
+    box.appendChild(el("div", "cardTitle", "⚠️ ต้องตรวจ (" + j.items.length + ")"));
+    box.appendChild(el("div", "hint", "แก้เวลาให้ถูก หรือกด \"ถูกต้องแล้ว\" ถ้าไม่มีอะไรผิด รายการอื่นระบบคิดเงินให้เองทั้งหมด"));
+    j.items.forEach(p => {
+      const row = el("div", "reviewItem");
+      const left = el("div");
+      left.appendChild(el("div", "", staffName(p.staff_id) + " · " + p.work_date));
+      left.appendChild(el("div", "sub", "เข้า " + fmt(p.check_in) + (p.check_out ? " · ออก " + fmt(p.check_out) : "")));
+      left.appendChild(el("div", "flag", p.flags.map(f => FLAG_TEXT[f] || f).join(" · ")));
+      const right = el("div", "row");
+      right.style.margin = "0";
+      const fix = el("button", "btn dark", "แก้"); fix.onclick = () => openEditor(p);
+      const ok = el("button", "btn", "ถูกต้องแล้ว");
+      ok.onclick = async () => {
+        const r = await api({ action: "edit_punch", admin_pin: adminPin, id: p.id, only_review: true });
+        if (!r || !r.ok){ alert(errText(r)); return; }
+        loadReview();
+      };
+      right.append(fix, ok);
+      row.append(left, right);
+      box.appendChild(row);
+    });
+  }
+
+  // ---------- แก้ / เพิ่มกะ ----------
+
+  let editing = null;
+
+  function openEditor(p){
+    editing = p;
+    $("edTitle").textContent = p ? "แก้กะ: " + staffName(p.staff_id) + " · " + p.work_date : "เพิ่มกะเอง";
+    $("edStaffRow").classList.toggle("hidden", !!p);
+    if (!p){
+      const sel = $("edStaff"); sel.innerHTML = "";
+      staffAll.filter(s => s.active).forEach(s => { const o = el("option", "", s.label || s.name); o.value = s.id; sel.appendChild(o); });
+    }
+    const today = localDateStr(new Date());
+    $("edIn").value = p ? (p.check_in_local || "") : today + "T09:00";
+    $("edOut").value = p ? (p.check_out_local || "") : today + "T18:00";
+    $("edDay").value = p && p.day_override !== null && p.day_override !== undefined ? String(p.day_override) : "";
+    $("edOt").value = p && p.ot_override_min !== null && p.ot_override_min !== undefined ? p.ot_override_min : "";
+    $("edNote").value = p ? (p.note || "") : "";
+    $("edDelete").classList.toggle("hidden", !p);
+    setMsg("edStatus", "");
+    $("editor").classList.add("show");
+  }
+
+  function closeEditor(){ $("editor").classList.remove("show"); editing = null; }
+
+  async function afterShiftChange(){
+    closeEditor();
+    await Promise.all([loadPunches(), loadReview()]);
+    if (!document.querySelector('[data-panel="pay"]').classList.contains("hidden")) loadPaySummary();
+  }
+
+  async function saveEditor(){
+    const body = {
+      admin_pin: adminPin, check_in: $("edIn").value, check_out: $("edOut").value,
+      day_override: $("edDay").value, ot_override_min: $("edOt").value, note: $("edNote").value.trim()
+    };
+    const j = editing
+      ? await api(Object.assign({ action: "edit_punch", id: editing.id }, body))
+      : await api(Object.assign({ action: "add_punch", staff_id: Number($("edStaff").value) }, body));
+    if (!j || !j.ok){ setMsg("edStatus", errText(j), false); return; }
+    afterShiftChange();
+  }
+
+  async function deleteEditor(){
+    if (!editing || !confirm("ลบกะนี้? (ลบแล้วกู้คืนไม่ได้)")) return;
+    const j = await api({ action: "delete_punch", admin_pin: adminPin, id: editing.id });
+    if (!j || !j.ok){ setMsg("edStatus", errText(j), false); return; }
+    afterShiftChange();
+  }
+
+  // ---------- ค่าแรง / โอที (ฟอร์มใช้ทั้งค่าสาขาและรายคน) ----------
+
+  let paySet = null; // ผลจาก pay_settings ของสาขาที่เลือก
+
+  const PAY_UI = [
+    { group: "วิธีคิดค่าแรง" },
+    { k: "pay_type", label: "คิดแบบ", type: "select", options: [["daily", "รายวัน"], ["hourly", "รายชั่วโมง"]] },
+    { k: "daily_rate", label: "ค่าแรงต่อวัน (บาท)", show: e => e.pay_type === "daily" },
+    { k: "hourly_rate", label: "ค่าแรงต่อชั่วโมง (บาท)", show: e => e.pay_type === "hourly" },
+    { k: "std_hours", label: "ชั่วโมงทำงานปกติต่อวัน", show: e => e.pay_type === "daily" },
+    { k: "half_day_hours", label: "ทำไม่ถึงกี่ ชม. = ครึ่งวัน", show: e => e.pay_type === "daily" },
+    { k: "min_day_hours", label: "ทำไม่ถึงกี่ ชม. = ไม่นับวัน", show: e => e.pay_type === "daily" },
+    { group: "โอที" },
+    { k: "ot_mode", label: "นับโอทีเมื่อ", type: "select", options: [["none", "ไม่มีโอที"], ["after_hours", "ทำเกิน X ชม./วัน"], ["after_time", "ออกงานหลังเวลา Y"], ["both", "ทั้งสองแบบ (ใช้ค่าที่มากกว่า)"]] },
+    { k: "ot_after_hours", label: "เกินกี่ ชม./วัน", show: e => e.ot_mode === "after_hours" || e.ot_mode === "both" },
+    { k: "ot_after_time", label: "หลังเวลา (HH:MM)", type: "time", show: e => e.ot_mode === "after_time" || e.ot_mode === "both" },
+    { k: "ot_rate_type", label: "ค่าโอทีคิดแบบ", type: "select", options: [["multiplier", "ค่าแรงต่อชม. × ตัวคูณ"], ["fixed", "บาทต่อชั่วโมง"]], show: e => e.ot_mode !== "none" },
+    { k: "ot_multiplier", label: "ตัวคูณ (เช่น 1.5)", show: e => e.ot_mode !== "none" && e.ot_rate_type === "multiplier" },
+    { k: "ot_fixed_rate", label: "ค่าโอที บาท/ชม.", show: e => e.ot_mode !== "none" && e.ot_rate_type === "fixed" },
+    { k: "ot_round_min", label: "ปัดลงทีละกี่นาที", show: e => e.ot_mode !== "none" },
+    { k: "ot_min_min", label: "ต้องเกินอย่างน้อยกี่นาทีถึงนับ", show: e => e.ot_mode !== "none" }
+  ];
+
+  function optText(f, v){ const o = (f.options || []).find(x => x[0] === v); return o ? o[1] : v; }
+
+  // own: ค่าที่ตั้งไว้ของระดับนี้ · inherited: ค่าที่ได้จากระดับบน (แสดงเป็นตัวจาง) · allowInherit: รายคน (ว่าง = ใช้ค่าสาขา)
+  function payForm(own, inherited, allowInherit){
+    const wrap = el("div");
+    const inputs = {};
+    const groups = [];
+    let grid = null;
+    PAY_UI.forEach(f => {
+      if (f.group){ wrap.appendChild(el("div", "group", f.group)); grid = el("div", "grid2"); wrap.appendChild(grid); return; }
+      const lab = el("label", "fl", f.label);
+      let inp;
+      if (f.type === "select"){
+        inp = el("select", "field");
+        if (allowInherit){ const o = el("option", "", "ใช้ค่าสาขา (" + optText(f, inherited[f.k]) + ")"); o.value = ""; inp.appendChild(o); }
+        f.options.forEach(([v, t]) => { const o = el("option", "", t); o.value = v; inp.appendChild(o); });
+        inp.value = own[f.k] !== undefined ? own[f.k] : (allowInherit ? "" : inherited[f.k]);
+      } else {
+        inp = el("input", "field");
+        inp.type = f.type === "time" ? "text" : "number";
+        if (f.type === "time") inp.placeholder = "20:00"; else { inp.step = "any"; inp.min = "0"; inp.inputMode = "decimal"; }
+        inp.value = own[f.k] !== undefined ? own[f.k] : (allowInherit ? "" : inherited[f.k]);
+        if (allowInherit) inp.placeholder = "ใช้ค่าสาขา: " + inherited[f.k];
+      }
+      inp.dataset.k = f.k;
+      inp.onchange = refresh; inp.oninput = refresh;
+      inputs[f.k] = inp;
+      lab.appendChild(inp);
+      grid.appendChild(lab);
+      groups.push([f, lab]);
+    });
+    function effective(){
+      const e = Object.assign({}, inherited);
+      Object.keys(inputs).forEach(k => { if (inputs[k].value !== "") e[k] = inputs[k].type === "number" ? Number(inputs[k].value) : inputs[k].value; });
+      return e;
+    }
+    function refresh(){ const e = effective(); groups.forEach(([f, lab]) => { lab.classList.toggle("hidden", !!(f.show && !f.show(e))); }); }
+    refresh();
+    return {
+      node: wrap,
+      get(){ const out = {}; Object.keys(inputs).forEach(k => { if (inputs[k].value !== "") out[k] = inputs[k].value; }); return out; }
+    };
+  }
+
+  // ---------- รอบตัดบิล ----------
+
+  const WEEKDAYS = ["อาทิตย์", "จันทร์", "อังคาร", "พุธ", "พฤหัสบดี", "ศุกร์", "เสาร์"];
+
+  function periodText(cfg){
+    if (!cfg) return "";
+    if (cfg.type === "monthly") return cfg.cut_day >= 31 ? "รายเดือน ตัดสิ้นเดือน" : "รายเดือน ตัดทุกวันที่ " + cfg.cut_day;
+    if (cfg.type === "semimonthly") return "เดือนละ 2 รอบ (1–" + cfg.first_end + " และ " + (cfg.first_end + 1) + "–สิ้นเดือน)";
+    if (cfg.type === "weekly") return (cfg.every > 1 ? "ทุก " + cfg.every + " สัปดาห์" : "รายสัปดาห์") + " ตัดวัน" + WEEKDAYS[cfg.end_weekday];
+    if (cfg.type === "days") return "ทุก " + cfg.every + " วัน (เริ่ม " + cfg.anchor + ")";
+    return "";
+  }
+  function thDate(d){ return new Date(d + "T00:00:00").toLocaleDateString("th-TH", { day: "numeric", month: "short", year: "numeric" }); }
+  function rangeText(p){ return thDate(p.start) + " – " + thDate(p.end); }
+
+  function periodForm(cfg, allowInherit){
+    cfg = cfg || {};
+    const wrap = el("div");
+    const type = el("select", "field");
+    const opts = [["monthly", "รายเดือน"], ["semimonthly", "เดือนละ 2 รอบ"], ["weekly", "รายสัปดาห์ / หลายสัปดาห์"], ["days", "ทุก X วัน"]];
+    if (allowInherit) opts.unshift(["", "ใช้รอบของสาขา"]);
+    opts.forEach(([v, t]) => { const o = el("option", "", t); o.value = v; type.appendChild(o); });
+    type.value = allowInherit && !cfg.type ? "" : (cfg.type || "monthly");
+    const grid = el("div", "grid2");
+    const mk = (label, inp) => { const l = el("label", "fl", label); l.appendChild(inp); grid.appendChild(l); return l; };
+    const num = (v, min, max) => { const i = el("input", "field"); i.type = "number"; i.min = min; i.max = max; i.value = v; return i; };
+    const cut = num(cfg.cut_day || 31, 1, 31);
+    const first = num(cfg.first_end || 15, 1, 27);
+    const every = num(cfg.every || 1, 1, 120);
+    const wd = el("select", "field"); WEEKDAYS.forEach((w, i) => { const o = el("option", "", "วัน" + w); o.value = i; wd.appendChild(o); }); wd.value = cfg.end_weekday !== undefined ? cfg.end_weekday : 0;
+    const anchor = el("input", "field"); anchor.type = "date"; anchor.value = cfg.anchor || localDateStr(new Date());
+    const lCut = mk("ตัดทุกวันที่ (31 = สิ้นเดือน)", cut);
+    const lFirst = mk("รอบแรกถึงวันที่", first);
+    const lEvery = mk("ทุกกี่ (สัปดาห์/วัน)", every);
+    const lWd = mk("ตัดรอบวัน", wd);
+    const lAnchor = mk("เริ่มนับจากวันที่", anchor);
+    function refresh(){
+      const t = type.value;
+      lCut.classList.toggle("hidden", t !== "monthly");
+      lFirst.classList.toggle("hidden", t !== "semimonthly");
+      lEvery.classList.toggle("hidden", t !== "weekly" && t !== "days");
+      lWd.classList.toggle("hidden", t !== "weekly");
+      lAnchor.classList.toggle("hidden", t !== "weekly" && t !== "days");
+    }
+    type.onchange = refresh; refresh();
+    const top = el("label", "fl", "แบบ"); top.appendChild(type);
+    wrap.append(top, grid);
+    return {
+      node: wrap,
+      get(){
+        const t = type.value;
+        if (!t) return null;
+        if (t === "monthly") return { type: t, cut_day: Number(cut.value) };
+        if (t === "semimonthly") return { type: t, first_end: Number(first.value) };
+        if (t === "weekly") return { type: t, every: Number(every.value), end_weekday: Number(wd.value), anchor: anchor.value };
+        return { type: t, every: Number(every.value), anchor: anchor.value };
+      }
+    };
+  }
+
+  let branchPeriodForm = null, defaultsForm = null;
+
+  async function loadPaySettings(){
+    if (!branchId || !adminPin) return;
+    const j = await api({ action: "pay_settings", admin_pin: adminPin, branch_id: branchId });
+    if (!j || !j.ok) return;
+    paySet = j;
+    const bp = j.branch_period;
+    const cur = bp.hist.length ? bp.hist[bp.hist.length - 1].cfg : bp.now.cfg;
+    $("periodNow").textContent = "รอบนี้: " + rangeText(bp.now) + " (" + periodText(bp.now.cfg) + ") · รอบถัดไป: " + rangeText(bp.next) + (bp.next.cfg.type !== bp.now.cfg.type || JSON.stringify(bp.next.cfg) !== JSON.stringify(bp.now.cfg) ? " (" + periodText(bp.next.cfg) + ")" : "");
+    branchPeriodForm = periodForm(cur, false);
+    $("periodBox").innerHTML = ""; $("periodBox").appendChild(branchPeriodForm.node);
+    defaultsForm = payForm(j.branch.pay_defaults, j.system_defaults, false);
+    $("defaultsBox").innerHTML = ""; $("defaultsBox").appendChild(defaultsForm.node);
+    $("advAllowStaff").checked = !!j.branch.staff_advance;
+    $("advAutoMax").value = j.branch.advance_auto_max || 0;
+    if (!$("advFrom").value){ $("advFrom").value = bp.now.start; $("advTo").value = bp.now.end; }
+    fillAdvStaff();
+    // รีเฟรชส่วนค่าแรงในการ์ดพนักงาน (ถ้าเปิดอยู่)
+    document.querySelectorAll("details.pay[open]").forEach(d => d.dispatchEvent(new Event("refresh")));
+  }
+
+  async function saveBranchPeriod(){
+    const cfg = branchPeriodForm && branchPeriodForm.get();
+    const j = await api({ action: "save_period", admin_pin: adminPin, branch_id: branchId, cfg });
+    if (!j || !j.ok){ setMsg("periodStatus", errText(j), false); return; }
+    await loadPaySettings(); loadPaySummary();
+    setMsg("periodStatus", "บันทึกรอบแล้ว", true);
+  }
+
+  async function saveDefaults(){
+    const j = await api({ action: "save_pay_defaults", admin_pin: adminPin, branch_id: branchId, pay: defaultsForm.get() });
+    if (!j || !j.ok){ setMsg("defaultsStatus", errText(j) + (j && j.fields ? " (" + j.fields.join(", ") + ")" : ""), false); return; }
+    await loadPaySettings(); loadPaySummary();
+    setMsg("defaultsStatus", "บันทึกแล้ว", true);
+  }
+
+  // ส่วน "💰 ค่าแรง / โอที / รอบ" ในการ์ดพนักงาน
+  function staffPayDetails(s){
+    const d = el("details", "pay");
+    const sum = el("summary", "", "💰 ค่าแรง / โอที / รอบตัดบิล");
+    d.appendChild(sum);
+    const body = el("div");
+    d.appendChild(body);
+    let pf = null, perf = null;
+    function render(){
+      body.innerHTML = "";
+      if (!paySet){ body.appendChild(el("div", "hint", "กำลังโหลด…")); return; }
+      const me = paySet.staff.find(x => x.id === s.id);
+      if (!me) return;
+      const inherited = Object.assign({}, paySet.system_defaults, paySet.branch.pay_defaults);
+      body.appendChild(el("div", "hint", "ช่องว่าง = ใช้ค่าเริ่มต้นของสาขา (แท็บเงิน)"));
+      pf = payForm(me.pay || {}, inherited, true);
+      body.appendChild(pf.node);
+      body.appendChild(el("div", "group", "รอบตัดบิล"));
+      body.appendChild(el("div", "hint", "รอบนี้: " + rangeText(me.period.now) + " (" + periodText(me.period.now.cfg) + ")"));
+      const ownCfg = me.own_period ? me.period.now.cfg : null;
+      perf = periodForm(ownCfg, true);
+      body.appendChild(perf.node);
+      const row = el("div", "row"); row.style.marginTop = "8px";
+      const save = el("button", "btn dark", "บันทึกค่าแรง/รอบของคนนี้");
+      const st = el("div", "status");
+      save.onclick = async () => {
+        const a = await api({ action: "save_staff_pay", admin_pin: adminPin, staff_id: s.id, pay: pf.get() });
+        if (!a || !a.ok){ st.textContent = errText(a) + (a && a.fields ? " (" + a.fields.join(", ") + ")" : ""); st.style.color = "#dc2626"; return; }
+        const cfg = perf.get();
+        const samePeriod = (!cfg && !me.own_period) || (cfg && me.own_period && JSON.stringify(cfg) === JSON.stringify(me.period.now.cfg));
+        if (!samePeriod){
+          const b = await api({ action: "save_period", admin_pin: adminPin, branch_id: branchId, staff_id: s.id, cfg });
+          if (!b || !b.ok){ st.textContent = errText(b); st.style.color = "#dc2626"; return; }
+        }
+        await loadPaySettings();
+        render();
+        st.textContent = "บันทึกแล้ว"; st.style.color = "#047857";
+        body.appendChild(st);
+      };
+      row.appendChild(save);
+      body.append(row, st);
+    }
+    d.addEventListener("toggle", () => { if (d.open) render(); });
+    d.addEventListener("refresh", render);
+    return d;
+  }
+
+  // ---------- ยอดเงินรอบนี้ ----------
+
+  function baht(n){ return Number(n || 0).toLocaleString("th-TH", { minimumFractionDigits: Number(n) % 1 ? 2 : 0, maximumFractionDigits: 2 }); }
+
+  async function loadPaySummary(){
+    if (!branchId || !adminPin) return;
+    setMsg("payStatus", "กำลังคำนวณ…");
+    const j = await api({ action: "pay_summary", admin_pin: adminPin, branch_id: branchId, date: $("payDate").value });
+    if (!j || !j.ok){ setMsg("payStatus", errText(j), false); return; }
+    const box = $("payCards");
+    box.innerHTML = "";
+    const tot = { base: 0, ot_pay: 0, advances: 0, net: 0, pending: 0 };
+    const card = (title, sub, net, items, cls) => {
+      const c = el("div", "payCard" + (cls ? " " + cls : ""));
+      const head = el("div", "payHead");
+      const left = el("div");
+      left.appendChild(el("div", "payName", title));
+      if (sub) left.appendChild(el("div", "sub", sub));
+      head.append(left, el("div", "payNet", baht(net) + " ฿"));
+      const g = el("div", "payGrid");
+      items.forEach(([k, v]) => { const d = el("div"); d.appendChild(document.createTextNode(k)); d.appendChild(el("b", "", v)); g.appendChild(d); });
+      c.append(head, g);
+      box.appendChild(c);
+    };
+    j.people.forEach(p => {
+      const t = p.totals;
+      card(p.label + (p.locked ? " 🔒" : ""), (p.pay_type === "hourly" ? "รายชั่วโมง" : "รายวัน") + " · " + rangeText(p.period), t.net, [
+        ["วันทำงาน", String(t.days_worked)], ["หยุด", String(t.days_off)],
+        ["ชั่วโมงงาน", String(t.worked_hours)], ["ชม.โอที", String(t.ot_hours)],
+        ["ค่าแรง", baht(t.base)], ["โอที", baht(t.ot_pay)],
+        ["เบิก", (t.advances ? "−" : "") + baht(t.advances)], ["รออนุมัติ", baht(t.pending)]
+      ]);
+      Object.keys(tot).forEach(k => { tot[k] += Number(t[k] || 0); });
+    });
+    if (j.people.length > 1) card("รวมทุกคน", "", tot.net, [["ค่าแรง", baht(tot.base)], ["โอที", baht(tot.ot_pay)], ["เบิก", (tot.advances ? "−" : "") + baht(tot.advances)]], "total");
+    setMsg("payStatus", j.people.length ? "" : "ยังไม่มีพนักงานในสาขานี้");
+  }
+
+  // ---------- เบิกเงิน ----------
+
+  const QUICK_ITEMS = ["เบิกเงินสด", "เบิกโอน", "ขนม", "ค่าของ", "ค่าเดินทาง"];
+
+  function fillAdvStaff(){
+    const sel = $("advStaffSel"); const keep = sel.value; sel.innerHTML = "";
+    staffAll.filter(s => s.active).forEach(s => { const o = el("option", "", s.label || s.name); o.value = s.id; sel.appendChild(o); });
+    if (keep) sel.value = keep;
+    if (!$("advDate").value) $("advDate").value = localDateStr(new Date());
+    const q = $("advQuick"); q.innerHTML = "";
+    QUICK_ITEMS.forEach(x => { const c = el("button", "chip", x); c.onclick = () => { $("advItem").value = x; }; q.appendChild(c); });
+  }
+
+  function statusChip(st){ return el("span", "stat " + st, { pending: "รออนุมัติ", approved: "อนุมัติแล้ว", rejected: "ไม่อนุมัติ" }[st] || st); }
+
+  async function loadAdvances(){
+    if (!branchId || !adminPin) return;
+    const j = await api({ action: "list_advances", admin_pin: adminPin, branch_id: branchId, from: $("advFrom").value, to: $("advTo").value });
+    if (!j || !j.ok) return;
+    setCount("advCount", j.pending.length);
+    const pbox = $("advPending"); pbox.innerHTML = "";
+    if (!j.pending.length) pbox.appendChild(el("div", "hint", "ไม่มีรายการรออนุมัติ"));
+    j.pending.forEach(a => {
+      const row = el("div", "reviewItem");
+      const left = el("div");
+      left.appendChild(el("div", "", staffName(a.staff_id) + " · " + baht(a.amount) + " บาท"));
+      left.appendChild(el("div", "sub", thDate(a.date) + (a.item ? " · " + a.item : "") + " · พนักงานขอเอง"));
+      const right = el("div", "row"); right.style.margin = "0";
+      const yes = el("button", "btn green", "✅ อนุมัติ"); yes.onclick = () => decideAdv(a.id, true);
+      const no = el("button", "btn", "❌ ไม่อนุมัติ"); no.onclick = () => decideAdv(a.id, false);
+      right.append(yes, no);
+      row.append(left, right);
+      pbox.appendChild(row);
+    });
+    const t = $("advTable");
+    t.innerHTML = "<tr><th>วันที่</th><th>พนักงาน</th><th>รายการ</th><th class='money'>บาท</th><th>สถานะ</th><th></th></tr>";
+    let total = 0;
+    j.advances.forEach(a => {
+      const tr = el("tr");
+      tr.appendChild(el("td", "", thDate(a.date)));
+      tr.appendChild(el("td", "", staffName(a.staff_id)));
+      tr.appendChild(el("td", "", (a.item || "") + (a.created_by === "staff" ? " (ขอเอง)" : "")));
+      tr.appendChild(el("td", "money", baht(a.amount)));
+      const st = el("td"); st.appendChild(statusChip(a.status)); tr.appendChild(st);
+      const del = el("td"); const b = el("button", "btn", "ลบ");
+      b.onclick = async () => {
+        if (!confirm("ลบรายการเบิกนี้?")) return;
+        const r = await api({ action: "delete_advance", admin_pin: adminPin, id: a.id });
+        if (!r || !r.ok){ alert(errText(r)); return; }
+        loadAdvances();
+      };
+      del.appendChild(b); tr.appendChild(del);
+      if (a.status === "approved") total += Number(a.amount);
+      t.appendChild(tr);
+    });
+    const tr = el("tr", "total");
+    ["รวม (อนุมัติแล้ว)", "", ""].forEach(x => tr.appendChild(el("td", "", x)));
+    tr.appendChild(el("td", "money", baht(total)));
+    tr.append(el("td"), el("td"));
+    t.appendChild(tr);
+  }
+
+  async function decideAdv(id, approve){
+    const j = await api({ action: "decide_advance", admin_pin: adminPin, id, approve });
+    if (!j || !j.ok){ alert(errText(j)); return; }
+    loadAdvances();
+  }
+
+  async function addAdvance(force){
+    const j = await api({
+      action: "add_advance", admin_pin: adminPin, staff_id: Number($("advStaffSel").value),
+      amount: $("advAmount").value, item: $("advItem").value.trim(), date: $("advDate").value, force
+    });
+    if (j && j.error === "pending_exists"){
+      const list = j.pending.map(p => baht(p.amount) + " บาท" + (p.item ? " (" + p.item + ")" : "")).join(", ");
+      if (confirm("คนนี้ขอเบิกเองไว้แล้ววันเดียวกัน: " + list + "\nถ้าเป็นรายการเดียวกัน ให้กด \"อนุมัติ\" ในช่องรออนุมัติแทน\n\nยังจะบันทึกเพิ่มอีกรายการไหม?")) return addAdvance(true);
+      return;
+    }
+    if (!j || !j.ok){ setMsg("advStatus", errText(j), false); return; }
+    $("advAmount").value = ""; $("advItem").value = "";
+    setMsg("advStatus", "บันทึกแล้ว", true);
+    loadAdvances();
+  }
+
+  async function saveAdvSettings(){
+    const j = await api({
+      action: "save_pay_defaults", admin_pin: adminPin, branch_id: branchId,
+      pay: paySet ? paySet.branch.pay_defaults : {},
+      staff_advance: $("advAllowStaff").checked, advance_auto_max: Number($("advAutoMax").value || 0)
+    });
+    if (!j || !j.ok){ setMsg("advSetStatus", errText(j), false); return; }
+    await loadPaySettings();
+    setMsg("advSetStatus", "บันทึกแล้ว", true);
   }
 
   // ---------- ภาษา ----------
@@ -551,6 +1156,8 @@
     document.querySelectorAll(".tab").forEach(b => b.classList.toggle("active", b.dataset.tab === name));
     document.querySelectorAll("[data-panel]").forEach(p => p.classList.toggle("hidden", p.dataset.panel !== name));
     if (name === "lang") loadUiRows();
+    if (name === "pay"){ loadPaySettings(); loadPaySummary(); }
+    if (name === "adv"){ loadPaySettings(); loadAdvances(); }
   }
 
   $("loginPin").addEventListener("keydown", e => { if (e.key === "Enter") doLogin(); });
