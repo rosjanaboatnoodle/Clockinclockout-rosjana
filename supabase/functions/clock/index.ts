@@ -1,5 +1,6 @@
 // Edge Function "clock" — ระบบตอกบัตร (ใช้ Supabase project เดียวกับปฏิทินได้ หรือใช้เดี่ยวๆ ก็ได้)
 //
+// Database: run supabase/migrations/0001_clock.sql, then 0002_gps_photo.sql (photos bucket).
 // Deploy: Supabase Dashboard -> Edge Functions -> create function named "clock" ->
 // paste this file's contents -> Deploy -> แท็บ Settings -> ปิด "Verify JWT with legacy secret"
 //
@@ -313,7 +314,7 @@ function staffView(s: Record<string, unknown>) {
 async function handleBootstrap(p: Record<string, unknown>) {
   const lang = cleanLang(p.lang);
   const [{ data: branches, error }, { data: staff }] = await Promise.all([
-    supabase.from("branches").select("id, name, sort").order("sort").order("name"),
+    supabase.from("branches").select("id, name, sort, lat, lng, radius_m, require_gps, require_photo").order("sort").order("name"),
     supabase.from("staff").select("id, branch_id, name, label, short, sort").eq("active", true).order("sort").order("name"),
   ]);
   if (error) return json({ ok: false, error: error.message });
@@ -493,7 +494,55 @@ function publicPunch(r: Punch) {
   return { id: r.id, staff_id: r.staff_id, work_date: r.work_date, check_in: r.check_in, check_out: r.check_out, forgot_out: r.forgot_out };
 }
 
+// ============================================================
+// GPS and photos
+// ============================================================
+
+const PHOTO_BUCKET = "punch-photos";
+const MAX_PHOTO_BYTES = 600 * 1024;  // the page shrinks photos to ~50-150 KB; this is only a safety cap
+const MAX_GPS_ACCURACY_M = 100;      // weaker readings than this are refused (ask to try again)
+
+// Distance in metres between two points on Earth.
+function distanceM(lat1: number, lng1: number, lat2: number, lng2: number): number {
+  const R = 6371000, rad = Math.PI / 180;
+  const dLat = (lat2 - lat1) * rad, dLng = (lng2 - lng1) * rad;
+  const a = Math.sin(dLat / 2) ** 2 + Math.cos(lat1 * rad) * Math.cos(lat2 * rad) * Math.sin(dLng / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(a));
+}
+
+type BranchGeo = { id: string; lat: number | null; lng: number | null; radius_m: number; require_gps: boolean; require_photo: boolean };
+
+// Checks the reported position against the branch. Returns the fields to store, or an error code.
+function checkLocation(branch: BranchGeo, p: Record<string, unknown>):
+  { ok: true; lat: number | null; lng: number | null; accuracy: number | null; distance: number | null } |
+  { ok: false; error: string; distance?: number; radius?: number; accuracy?: number } {
+  const lat = Number(p.lat), lng = Number(p.lng), accuracy = Number(p.accuracy);
+  const has = Number.isFinite(lat) && Number.isFinite(lng) && Math.abs(lat) <= 90 && Math.abs(lng) <= 180 && !(lat === 0 && lng === 0);
+  const shopSet = branch.lat !== null && branch.lng !== null;
+  const distance = has && shopSet ? Math.round(distanceM(lat, lng, branch.lat as number, branch.lng as number)) : null;
+  if (branch.require_gps && shopSet) {
+    if (!has) return { ok: false, error: "gps_required" };
+    if (Number.isFinite(accuracy) && accuracy > MAX_GPS_ACCURACY_M) return { ok: false, error: "gps_weak", accuracy: Math.round(accuracy) };
+    if ((distance as number) > branch.radius_m) return { ok: false, error: "out_of_area", distance: distance as number, radius: branch.radius_m };
+  }
+  return { ok: true, lat: has ? lat : null, lng: has ? lng : null, accuracy: has && Number.isFinite(accuracy) ? Math.round(accuracy) : null, distance };
+}
+
+// photo: "data:image/jpeg;base64,..." -> stored file path
+async function savePhoto(branchId: string, staffId: number, type: string, photo: string, now: Date): Promise<string> {
+  const m = /^data:image\/(jpeg|png|webp);base64,([A-Za-z0-9+/=]+)$/.exec(photo);
+  if (!m) throw new Error("bad_photo");
+  const bytes = Uint8Array.from(atob(m[2]), (c) => c.charCodeAt(0));
+  if (bytes.length > MAX_PHOTO_BYTES) throw new Error("photo_too_large");
+  const ext = m[1] === "jpeg" ? "jpg" : m[1];
+  const path = `${branchId}/${localDate(now)}/${staffId}-${type}-${now.getTime()}.${ext}`;
+  const { error } = await supabase.storage.from(PHOTO_BUCKET).upload(path, bytes, { contentType: `image/${m[1]}`, upsert: false });
+  if (error) throw new Error("photo_upload_failed: " + error.message);
+  return path;
+}
+
 // Public with the person's own PIN. type: "in" | "out"
+// Optional: lat, lng, accuracy (metres) and photo (data URL), required when the branch asks for them.
 async function handlePunch(p: Record<string, unknown>) {
   const branchId = String(p.branch ?? "");
   const staffId = Number(p.staff_id) || 0;
@@ -507,6 +556,14 @@ async function handlePunch(p: Record<string, unknown>) {
   if (!person || !person.active || person.branch_id !== branchId) return json({ ok: false, error: "unknown_staff" });
   if (!person.pin_hash) return json({ ok: false, error: "no_pin" });
   if (!(await checkPassword(person.pin_hash, pin))) return json({ ok: false, error: "wrong_pin" });
+
+  const { data: branch } = await supabase.from("branches")
+    .select("id, lat, lng, radius_m, require_gps, require_photo").eq("id", branchId).maybeSingle();
+  if (!branch) return json({ ok: false, error: "unknown_branch" });
+  const loc = checkLocation(branch as BranchGeo, p);
+  if (!loc.ok) return json(loc);
+  const photo = String(p.photo ?? "");
+  if (branch.require_photo && !photo) return json({ ok: false, error: "photo_required" });
 
   const now = new Date();
   const { data: openRows } = await supabase.from("punches").select("*")
@@ -522,8 +579,14 @@ async function handlePunch(p: Record<string, unknown>) {
       // Forgot to clock out last time: close it as "forgot" for the admin to fix, then continue.
       await supabase.from("punches").update({ forgot_out: true, updated_at: now.toISOString() }).eq("id", open.id);
     }
+    let photoPath: string | null = null;
+    if (photo) {
+      try { photoPath = await savePhoto(branchId, staffId, "in", photo, now); }
+      catch (e) { return json({ ok: false, error: String((e as Error).message) }); }
+    }
     const { data, error } = await supabase.from("punches").insert({
       branch_id: branchId, staff_id: staffId, work_date: localDate(now), check_in: now.toISOString(),
+      in_lat: loc.lat, in_lng: loc.lng, in_accuracy_m: loc.accuracy, in_distance_m: loc.distance, in_photo: photoPath,
     }).select("*").maybeSingle();
     if (error) {
       // Two taps at once: the unique "one open shift" index stops the second one.
@@ -534,21 +597,30 @@ async function handlePunch(p: Record<string, unknown>) {
     status = open ? "ok_in_after_forgot" : "ok_in";
   } else {
     if (!open) return json({ ok: false, error: "not_in" });
+    let photoPath: string | null = null;
+    if (photo) {
+      try { photoPath = await savePhoto(branchId, staffId, "out", photo, now); }
+      catch (e) { return json({ ok: false, error: String((e as Error).message) }); }
+    }
     const { data, error } = await supabase.from("punches")
-      .update({ check_out: now.toISOString(), updated_at: now.toISOString() })
+      .update({
+        check_out: now.toISOString(), updated_at: now.toISOString(),
+        out_lat: loc.lat, out_lng: loc.lng, out_accuracy_m: loc.accuracy, out_distance_m: loc.distance, out_photo: photoPath,
+      })
       .eq("id", open.id).is("check_out", null).select("*").maybeSingle();
     if (error) return json({ ok: false, error: error.message });
     if (!data) return json({ ok: false, error: "not_in" });
     punch = data as Punch;
     status = "ok_out";
   }
+  const distance = loc.distance;
 
   const [punches, messages] = await Promise.all([
     todayPunches(branchId),
     calendarMessages(branchId, localDate(now), lang),
   ]);
   return json({
-    ok: true, status, punch: publicPunch(punch), staff_name: person.name,
+    ok: true, status, punch: publicPunch(punch), staff_name: person.name, distance,
     punches: punches.map(publicPunch), messages,
   });
 }
@@ -560,10 +632,74 @@ async function handlePunchesRange(p: Record<string, unknown>) {
   const from = String(p.from ?? "");
   const to = String(p.to ?? from);
   if (!isIsoDate(from) || !isIsoDate(to)) return json({ ok: false, error: "bad_date" });
+  await cleanupOldPhotos();
   const { data, error } = await supabase.from("punches").select("*")
     .eq("branch_id", branchId).gte("work_date", from).lte("work_date", to).order("work_date").order("check_in");
   if (error) return json({ ok: false, error: error.message });
-  return json({ ok: true, punches: data ?? [] });
+  const rows = (data ?? []) as Array<Record<string, unknown>>;
+  // Short-lived links to the photos (the bucket is private)
+  const paths = rows.flatMap((r) => [r.in_photo, r.out_photo]).filter(Boolean) as string[];
+  const urls = new Map<string, string>();
+  if (paths.length) {
+    const { data: signed } = await supabase.storage.from(PHOTO_BUCKET).createSignedUrls(paths, 3600);
+    for (const s of signed ?? []) if (s.path && s.signedUrl) urls.set(s.path, s.signedUrl);
+  }
+  return json({
+    ok: true,
+    punches: rows.map((r) => ({
+      ...r,
+      in_photo_url: r.in_photo ? urls.get(String(r.in_photo)) ?? null : null,
+      out_photo_url: r.out_photo ? urls.get(String(r.out_photo)) ?? null : null,
+    })),
+  });
+}
+
+// Deletes photos older than each branch's photo_keep_days. Runs at most once a day, from the admin page.
+async function cleanupOldPhotos() {
+  try {
+    const today = localDate(new Date());
+    if ((await getSetting<string | null>("photo_cleanup_date", null)) === today) return;
+    await setSetting("photo_cleanup_date", today);
+    const { data: branches } = await supabase.from("branches").select("id, photo_keep_days");
+    for (const b of branches ?? []) {
+      const keep = Math.max(1, Number(b.photo_keep_days) || 60);
+      const cutoff = localDate(new Date(Date.now() - keep * 86400000));
+      for (const field of ["in_photo", "out_photo"]) {
+        const { data: old } = await supabase.from("punches").select(`id, ${field}`)
+          .eq("branch_id", b.id).lt("work_date", cutoff).not(field, "is", null).limit(500);
+        const list = (old ?? []) as Array<Record<string, unknown>>;
+        if (!list.length) continue;
+        await supabase.storage.from(PHOTO_BUCKET).remove(list.map((r) => String(r[field])));
+        await supabase.from("punches").update({ [field]: null }).in("id", list.map((r) => r.id));
+      }
+    }
+  } catch (e) {
+    console.error("photo cleanup failed", e);
+  }
+}
+
+// Central admin. Location, radius and photo rules of a branch.
+async function handleSaveBranchSettings(p: Record<string, unknown>) {
+  if (!(await checkAdminPin(String(p.admin_pin ?? "")))) return json({ ok: false, error: "wrong_admin_pin" });
+  const id = String(p.id ?? "");
+  const num = (v: unknown) => (v === "" || v === null || v === undefined) ? null : Number(v);
+  const lat = num(p.lat), lng = num(p.lng);
+  if ((lat === null) !== (lng === null)) return json({ ok: false, error: "bad_location" });
+  if (lat !== null && (!Number.isFinite(lat) || !Number.isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng as number) > 180)) {
+    return json({ ok: false, error: "bad_location" });
+  }
+  const radius = Math.round(Number(p.radius_m));
+  if (!Number.isFinite(radius) || radius < 5 || radius > 5000) return json({ ok: false, error: "bad_radius" });
+  if (p.require_gps && lat === null) return json({ ok: false, error: "location_needed" });
+  const keep = Math.round(Number(p.photo_keep_days ?? 60));
+  const row = {
+    lat, lng, radius_m: radius, require_gps: !!p.require_gps, require_photo: !!p.require_photo,
+    photo_keep_days: Number.isFinite(keep) ? Math.min(365, Math.max(1, keep)) : 60,
+  };
+  const { error } = await supabase.from("branches").update(row).eq("id", id);
+  if (error) return json({ ok: false, error: error.message });
+  await logAdmin("save_branch_settings", { id, ...row });
+  return json({ ok: true });
 }
 
 // ============================================================
@@ -581,6 +717,7 @@ const ACTIONS: Record<string, (p: Record<string, unknown>) => Promise<Response>>
   list_staff_admin: handleListStaffAdmin,
   save_staff_member: handleSaveStaffMember,
   punches_range: handlePunchesRange,
+  save_branch_settings: handleSaveBranchSettings,
   ai_translate: handleAiTranslate,
   translate_page: handleTranslatePage,
   list_translations: handleListTranslations,

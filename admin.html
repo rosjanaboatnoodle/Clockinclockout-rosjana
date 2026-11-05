@@ -52,6 +52,13 @@
   .langGrid{ display:grid; grid-template-columns: minmax(90px, 38%) 1fr; gap:6px; align-items:center; margin-bottom:6px; font-size:13px; }
   .edited{ border-color:#f59e0b !important; }
   .hidden{ display:none !important; }
+  .thumb{ width:44px; height:44px; object-fit:cover; border-radius:8px; cursor:pointer; vertical-align:middle; }
+  .check{ display:flex; align-items:center; gap:8px; font-weight:800; font-size:14px; margin:6px 0; }
+  .check input{ width:20px; height:20px; }
+  .far{ color:#b91c1c; font-weight:900; }
+  .viewer{ position:fixed; inset:0; background:rgba(0,0,0,.85); display:none; align-items:center; justify-content:center; z-index:99; padding:16px; }
+  .viewer.show{ display:flex; }
+  .viewer img{ max-width:100%; max-height:100%; border-radius:12px; }
 </style>
 </head>
 <body>
@@ -125,7 +132,27 @@
         <input class="field" id="brName" placeholder="ชื่อสาขา">
         <button class="btn dark" onclick="renameBranch()">บันทึกชื่อ</button>
       </div>
-      <div class="cardTitle" style="margin-top:12px;">เพิ่มสาขาใหม่</div>
+      <div class="cardTitle" style="margin-top:14px;">📍 ตำแหน่งร้าน และการยืนยันตัวตน</div>
+      <div class="hint">ไปยืนในร้านแล้วกด "ใช้ตำแหน่งตอนนี้" หรือวางพิกัดจาก Google Maps (เช่น 13.7563, 100.5018)</div>
+      <div class="row">
+        <input class="field" id="geoText" placeholder="ละติจูด, ลองจิจูด" oninput="showGeoLink()">
+        <button class="btn" onclick="useMyLocation()">📍 ใช้ตำแหน่งตอนนี้</button>
+      </div>
+      <div class="hint" id="geoInfo"></div>
+      <div class="row">
+        <span class="hint" style="margin:0;">รัศมี (เมตร)</span>
+        <input class="field sm" id="radius" type="number" min="5" max="5000" value="50">
+      </div>
+      <div class="hint">GPS มือถือคลาดเคลื่อนปกติ 5–20 ม. ในอาคารอาจถึง 30–50 ม. แนะนำเริ่มที่ 50 ม. แล้วค่อยลด</div>
+      <label class="check"><input type="checkbox" id="reqGps"> บังคับให้อยู่ในรัศมีตอนตอกบัตร</label>
+      <label class="check"><input type="checkbox" id="reqPhoto"> บังคับถ่ายรูปตอนตอกบัตร</label>
+      <div class="row">
+        <span class="hint" style="margin:0;">เก็บรูปไว้ (วัน)</span>
+        <input class="field sm" id="keepDays" type="number" min="1" max="365" value="60">
+      </div>
+      <div class="row"><button class="btn dark" onclick="saveGeo()">บันทึกการตั้งค่าสาขานี้</button></div>
+
+      <div class="cardTitle" style="margin-top:14px;">เพิ่มสาขาใหม่</div>
       <div class="row"><input class="field" id="newBrName" placeholder="ชื่อสาขา"></div>
       <div class="row">
         <input class="field" id="newBrId" placeholder="รหัสสาขาภาษาอังกฤษ เช่น branch2">
@@ -167,6 +194,8 @@
   </div>
 </div>
 
+<div class="viewer" id="viewer" onclick="this.classList.remove('show')"><img id="viewerImg" alt=""></div>
+
 <script src="ui-text.js"></script>
 <script>
   // ใส่ค่าเดียวกับใน index.html
@@ -181,6 +210,9 @@
     missing_name: "กรุณาใส่ชื่อ",
     bad_branch_id: "รหัสสาขาต้องเป็นภาษาอังกฤษหรือตัวเลข",
     duplicate_name: "มีชื่อนี้ในสาขาแล้ว",
+    bad_location: "พิกัดไม่ถูกต้อง ใส่แบบ 13.7563, 100.5018",
+    bad_radius: "รัศมีต้องอยู่ระหว่าง 5–5000 เมตร",
+    location_needed: "ต้องตั้งตำแหน่งร้านก่อน ถึงจะบังคับ GPS ได้",
     already_setup: "ระบบตั้งค่าไปแล้ว ใช้รหัสแอดมินเดิมเข้าสู่ระบบ",
     unknown_branch: "ไม่พบสาขา"
   };
@@ -270,6 +302,7 @@
     if (!keep) branchId = $("branchSelect").value;
     const b = branches.find(x => x.id === branchId);
     $("brName").value = b ? b.name : "";
+    fillGeo(b);
     const link = new URL("index.html", location.href);
     link.searchParams.set("branch", branchId);
     $("branchLink").textContent = b ? "ลิงก์ตอกบัตรของสาขานี้: " + link.toString() : "";
@@ -293,6 +326,66 @@
     $("newBrId").value = ""; $("newBrName").value = "";
     await reloadBranches(j.id);
     setMsg("brStatus", "เพิ่มสาขาแล้ว", true);
+  }
+
+  // ---------- ตำแหน่งร้าน ----------
+
+  function fillGeo(b){
+    b = b || {};
+    $("geoText").value = (b.lat !== null && b.lat !== undefined) ? b.lat + ", " + b.lng : "";
+    $("radius").value = b.radius_m || 50;
+    $("reqGps").checked = !!b.require_gps;
+    $("reqPhoto").checked = !!b.require_photo;
+    $("keepDays").value = b.photo_keep_days || 60;
+    showGeoLink();
+  }
+
+  function parseGeo(){
+    const m = $("geoText").value.match(/(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)/);
+    return m ? { lat: Number(m[1]), lng: Number(m[2]) } : null;
+  }
+
+  function showGeoLink(){
+    const g = parseGeo();
+    const info = $("geoInfo");
+    info.innerHTML = "";
+    if (!g) return;
+    const a = el("a", "", "ดูตำแหน่งนี้ใน Google Maps");
+    a.href = "https://www.google.com/maps?q=" + g.lat + "," + g.lng;
+    a.target = "_blank"; a.rel = "noopener";
+    info.appendChild(a);
+  }
+
+  // อ่านตำแหน่งหลายครั้ง (สูงสุด 15 วินาที) แล้วใช้ค่าที่แม่นที่สุด
+  function useMyLocation(){
+    if (!navigator.geolocation){ setMsg("brStatus", "มือถือ/เบราว์เซอร์นี้หาตำแหน่งไม่ได้", false); return; }
+    let best = null;
+    setMsg("brStatus", "กำลังหาตำแหน่ง… ยืนนิ่งๆ ในร้าน");
+    const id = navigator.geolocation.watchPosition(pos => {
+      if (!best || pos.coords.accuracy < best.accuracy) best = { lat: pos.coords.latitude, lng: pos.coords.longitude, accuracy: pos.coords.accuracy };
+      $("geoText").value = best.lat.toFixed(6) + ", " + best.lng.toFixed(6);
+      showGeoLink();
+      setMsg("brStatus", "ได้ตำแหน่งแล้ว (แม่นยำ ±" + Math.round(best.accuracy) + " ม.) กด \"บันทึกการตั้งค่าสาขานี้\"", true);
+      if (best.accuracy <= 10) navigator.geolocation.clearWatch(id);
+    }, err => {
+      setMsg("brStatus", err.code === 1 ? "ไม่ได้รับอนุญาตให้ใช้ตำแหน่ง เปิดในการตั้งค่ามือถือ" : "หาตำแหน่งไม่ได้", false);
+    }, { enableHighAccuracy: true, maximumAge: 0, timeout: 20000 });
+    setTimeout(() => navigator.geolocation.clearWatch(id), 15000);
+  }
+
+  async function saveGeo(){
+    const text = $("geoText").value.trim();
+    const g = parseGeo();
+    if (text && !g){ setMsg("brStatus", ERRORS.bad_location, false); return; }
+    const j = await api({
+      action: "save_branch_settings", admin_pin: adminPin, id: branchId,
+      lat: g ? g.lat : "", lng: g ? g.lng : "",
+      radius_m: Number($("radius").value), require_gps: $("reqGps").checked, require_photo: $("reqPhoto").checked,
+      photo_keep_days: Number($("keepDays").value)
+    });
+    if (!j || !j.ok){ setMsg("brStatus", errText(j), false); return; }
+    await reloadBranches(branchId);
+    setMsg("brStatus", "บันทึกการตั้งค่าสาขาแล้ว", true);
   }
 
   // ---------- พนักงาน ----------
@@ -355,18 +448,39 @@
     const names = {};
     ((s && s.staff) || []).forEach(x => { names[x.id] = x.label || x.name; });
     const table = $("punchTable");
-    table.innerHTML = "<tr><th>วันที่</th><th>พนักงาน</th><th>เข้า</th><th>ออก</th><th>ชั่วโมง</th></tr>";
+    const b = branches.find(x => x.id === branchId) || {};
+    table.innerHTML = "<tr><th>วันที่</th><th>พนักงาน</th><th>เข้า</th><th></th><th>ออก</th><th></th><th>ชั่วโมง</th></tr>";
     j.punches.forEach(p => {
       const tr = el("tr");
       tr.appendChild(el("td", "", p.work_date));
       tr.appendChild(el("td", "", names[p.staff_id] || ("#" + p.staff_id)));
       tr.appendChild(el("td", "", fmt(p.check_in)));
+      tr.appendChild(proofCell(p.in_distance_m, p.in_accuracy_m, p.in_photo_url, b));
       const out = el("td", p.forgot_out ? "warn" : "", p.forgot_out ? "ลืมตอกออก" : (p.check_out ? fmt(p.check_out) : "กำลังทำงาน"));
       tr.appendChild(out);
+      tr.appendChild(proofCell(p.out_distance_m, p.out_accuracy_m, p.out_photo_url, b));
       tr.appendChild(el("td", "", p.check_out ? hoursBetween(p.check_in, p.check_out).toFixed(2) : ""));
       table.appendChild(tr);
     });
     setMsg("punchStatus", j.punches.length ? j.punches.length + " รายการ" : "ไม่มีรายการในช่วงนี้");
+  }
+
+  // ระยะห่างจากร้าน + รูปถ่าย ของการตอกเข้า/ออก
+  function proofCell(distance, accuracy, photoUrl, b){
+    const td = el("td");
+    if (photoUrl){
+      const img = el("img", "thumb"); img.src = photoUrl; img.alt = "";
+      img.onclick = () => { $("viewerImg").src = photoUrl; $("viewer").classList.add("show"); };
+      td.appendChild(img);
+      td.appendChild(document.createTextNode(" "));
+    }
+    if (distance !== null && distance !== undefined){
+      const far = b.radius_m && distance > b.radius_m;
+      const sp = el("span", far ? "far" : "", Math.round(distance) + " ม.");
+      if (accuracy) sp.title = "ความแม่นยำ ±" + Math.round(accuracy) + " ม.";
+      td.appendChild(sp);
+    }
+    return td;
   }
 
   // ---------- ภาษา ----------
