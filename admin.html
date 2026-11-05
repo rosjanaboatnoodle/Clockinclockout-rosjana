@@ -73,15 +73,16 @@
   .money{ text-align:right; font-variant-numeric: tabular-nums; }
   tr.total td{ font-weight:900; border-top:2px solid #e5e7eb; }
   .fl.wide{ grid-column: 1 / -1; }
-  .wdRow{ display:grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap:4px; }
-  .wdCell{ display:flex; flex-direction:column; gap:2px; text-align:center; }
-  .wdCell .field{ padding:7px 2px; font-size:12px; }
+  .wdRow{ display:grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap:6px; }
+  .wdCell{ display:flex; align-items:center; gap:6px; }
+  .wdCell .sub{ flex:0 0 30px; font-weight:900; color:#374151; }
+  .wdCell .field{ flex:1; min-width:0; padding:8px 6px; font-size:13px; }
   .shiftRow{ display:flex; align-items:center; gap:8px; padding:8px 0; border-bottom:1px dashed #e5e7eb; flex-wrap:wrap; }
   .shiftDot{ width:14px; height:14px; border-radius:50%; flex:none; }
   .roster{ border-collapse:collapse; width:100%; font-size:12.5px; }
   .roster th, .roster td{ padding:4px 3px; border-bottom:1px solid #f1f5f9; text-align:center; white-space:nowrap; }
   .roster th:first-child, .roster td:first-child{ text-align:left; position:sticky; left:0; background:#fff; }
-  .roster select{ padding:5px 2px; border-radius:6px; border:2px solid #e5e7eb; font-size:12px; max-width:92px; }
+  .roster select{ padding:5px 2px; border-radius:6px; border:2px solid #e5e7eb; font-size:12px; min-width:96px; max-width:130px; }
   .roster select.set{ border-color:#6366f1; font-weight:900; }
   .roster td.today{ background:#eef2ff; }
   .grid2{ display:grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap:8px; }
@@ -1009,8 +1010,8 @@
           const cell = el("div", "wdCell");
           cell.appendChild(el("div", "sub", WD_SHORT[d]));
           const sel = el("select", "field");
-          const blank = el("option", "", allowInherit && inhW[d] !== undefined ? "(สาขา)" : "—"); blank.value = ""; sel.appendChild(blank);
-          shiftOptions().forEach(([v, t]) => { const o = el("option", "", t.split(" ")[0]); o.value = v; o.title = t; sel.appendChild(o); });
+          const blank = el("option", "", allowInherit && inhW[d] !== undefined ? "ใช้ค่าสาขา" : "ใช้กะประจำ"); blank.value = ""; sel.appendChild(blank);
+          ((paySet && paySet.shifts) || []).forEach(sh => { const o = el("option", "", sh.name + " (" + sh.start_time + "–" + sh.end_time + ")"); o.value = String(sh.id); sel.appendChild(o); });
           const off = el("option", "", "หยุด"); off.value = "off"; sel.appendChild(off);
           sel.value = ownW[d] !== undefined ? String(ownW[d]) : "";
           sel.onchange = refresh;
