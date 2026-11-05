@@ -64,6 +64,8 @@
   .dot{ width:9px; height:9px; border-radius:50%; background:#cbd5e1; flex:none; }
   .dot.working{ background:#10b981; }
   .dot.done{ background:#64748b; }
+  .dot.onBreak{ background:#f59e0b; }
+  .btnRow.breakRow .btn{ background:#fef3c7; color:#92400e; font-size:15px; padding:11px 10px; }
 
   .history{ display:flex; flex-direction:column; gap:6px; }
   .hRow{ background:#fff; border-radius:10px; padding:8px 10px; display:flex; justify-content:space-between; align-items:center; gap:8px; font-size:14px; }
@@ -202,6 +204,9 @@
     <div class="btnRow">
       <button class="btn btnIn" id="btnIn" onclick="punch('in')" data-t="clockIn">✅ เข้างาน</button>
       <button class="btn btnOut" id="btnOut" onclick="punch('out')" data-t="clockOut">⬛ ออกงาน</button>
+    </div>
+    <div class="btnRow breakRow" id="breakRow" style="display:none;">
+      <button class="btn" id="btnBreak" onclick="toggleBreak()"></button>
     </div>
     <div class="result" id="punchResult"></div>
     <div class="msgList" id="punchMsgs" style="margin-top:10px;"></div>
@@ -425,9 +430,12 @@
     return s ? s.label : name;
   }
 
+  function openPunchOf(staffId){ return punches.find(p => p.staff_id === staffId && !p.check_out && !p.forgot_out) || null; }
   function stateOf(staffId){
     const mine = punches.filter(p => p.staff_id === staffId);
-    if (mine.some(p => !p.check_out && !p.forgot_out)) return "working";
+    const open = openPunchOf(staffId);
+    if (open && open.on_break) return "onBreak";
+    if (open) return "working";
     if (mine.some(p => p.check_out)) return "done";
     return "notYet";
   }
@@ -479,6 +487,7 @@
     document.getElementById("photoBox").style.display = b.require_photo ? "" : "none";
     document.getElementById("privacyNote").style.display = (needGps || b.require_photo) ? "" : "none";
     clearPhoto();
+    renderBreakRow();
     document.getElementById("myBox").style.display = "none";
     document.getElementById("dutyBox").style.display = "none";
     if (needGps) startGps(b);
@@ -631,11 +640,69 @@
     punches = j.punches || punches;
     messages = j.messages || messages;
     renderAll();
+    renderBreakRow();
+    if (j.day){
+      // กะและมาสาย/กลับก่อน ต่อท้ายข้อความ
+      const extraInfo = [];
+      if (j.day.shift) extraInfo.push(t("shiftLabel") + " " + j.day.shift.name + " " + j.day.shift.start + "–" + j.day.shift.end);
+      if (type === "in" && j.day.shift) extraInfo.push(j.day.late_min ? t("lateBy", { m: j.day.late_min }) : t("onTime"));
+      if (type === "out" && j.day.early_min) extraInfo.push(t("earlyLeave", { m: j.day.early_min }));
+      if (extraInfo.length) setResult(okText + " " + time + " · " + extraInfo.join(" · "), "ok");
+    }
     // หลังเข้างาน โชว์ข้อความของวันนี้ ไฮไลต์เวรของคนนี้ และเวรที่จะถึง
     if (type === "in") renderMessages(document.getElementById("punchMsgs"), messages, j.staff_name);
     renderDuties(j.my_duties);
   }
 
+
+  // ---------- พัก (เฉพาะคนที่ตั้งแบบ "ตอกพัก") ----------
+
+  function renderBreakRow(){
+    const row = document.getElementById("breakRow");
+    const open = current ? openPunchOf(current.id) : null;
+    if (!open || !open.break_punch){ row.style.display = "none"; return; }
+    row.style.display = "";
+    document.getElementById("btnBreak").textContent = open.on_break ? t("breakEnd") : t("breakStart");
+  }
+
+  async function toggleBreak(){
+    if (busy || !current) return;
+    const open = openPunchOf(current.id);
+    if (!open) return;
+    const pin = document.getElementById("pinInput").value.trim();
+    if (!/^\d{4,6}$/.test(pin)){ setResult(t("pinInvalid"), "err"); document.getElementById("pinInput").focus(); return; }
+    busy = true;
+    const type = open.on_break ? "break_end" : "break_start";
+    const j = await api({ action: "punch", key: KEY, staff_id: current.id, pin, type, lang });
+    busy = false;
+    if (!j || !j.ok){
+      const k = { already_on_break: "alreadyOnBreak", not_on_break: "notOnBreak" }[j && j.error];
+      setResult(k ? t(k) : errorText(j), "err");
+      return;
+    }
+    document.getElementById("pinInput").value = "";
+    punches = j.punches || punches;
+    renderAll();
+    renderBreakRow();
+    setResult(type === "break_start" ? t("breakStarted") + " " + fmtTime(j.at) : t("breakEnded", { m: j.break_min }), "ok");
+  }
+
+  function renderMyShifts(list){
+    const box = document.getElementById("myBox");
+    if (!list) return;
+    const wrap = el("div");
+    wrap.appendChild(el("div", "cardTitle", t("myShiftsTitle"))).style.marginTop = "10px";
+    list.forEach(d => {
+      const row = el("div", "weekRow");
+      row.appendChild(el("div", "weekDay", dayLabel(d.date)));
+      const items = el("div", "weekItems");
+      if (d.shift){ const g = el("span", "tag", d.shift.name + " " + d.shift.start + "–" + d.shift.end); g.style.background = d.shift.color || "#6366f1"; items.appendChild(g); }
+      else items.appendChild(el("span", "weekNone", d.off ? t("dayOff") : t("noShiftSet")));
+      row.appendChild(items);
+      wrap.appendChild(row);
+    });
+    box.insertBefore(wrap, box.children[2] || null);
+  }
 
   // ---------- เบิกเงิน / ยอดของฉัน (ใช้ PIN ที่กรอกไว้) ----------
 
@@ -653,6 +720,7 @@
     const j = await api({ action: "my_summary", key: KEY, staff_id: current.id, pin, lang });
     if (!j || !j.ok){ setResult(errorText(j), "err"); return; }
     renderMy(j, pin);
+    renderMyShifts(j.my_shifts);
     renderDuties(j.my_duties);
   }
 
@@ -667,6 +735,7 @@
     stat(String(j.ot_hours), t("myOt") + " (" + t("myOtUnit") + ")");
     stat(fmtBaht(j.advances_total), t("myAdvanced"));
     stat(fmtBaht(j.pending_total), t("myPending"));
+    if (j.late_times) stat(String(j.late_times), t("lateTimes"));
     box.appendChild(stats);
     if (!j.advances.length) box.appendChild(el("div", "empty", t("noAdvances")));
     j.advances.slice().reverse().forEach(a => {

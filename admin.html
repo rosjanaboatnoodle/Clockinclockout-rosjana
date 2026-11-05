@@ -72,6 +72,18 @@
   .payCard.total{ background:#f8fafc; }
   .money{ text-align:right; font-variant-numeric: tabular-nums; }
   tr.total td{ font-weight:900; border-top:2px solid #e5e7eb; }
+  .fl.wide{ grid-column: 1 / -1; }
+  .wdRow{ display:grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap:4px; }
+  .wdCell{ display:flex; flex-direction:column; gap:2px; text-align:center; }
+  .wdCell .field{ padding:7px 2px; font-size:12px; }
+  .shiftRow{ display:flex; align-items:center; gap:8px; padding:8px 0; border-bottom:1px dashed #e5e7eb; flex-wrap:wrap; }
+  .shiftDot{ width:14px; height:14px; border-radius:50%; flex:none; }
+  .roster{ border-collapse:collapse; width:100%; font-size:12.5px; }
+  .roster th, .roster td{ padding:4px 3px; border-bottom:1px solid #f1f5f9; text-align:center; white-space:nowrap; }
+  .roster th:first-child, .roster td:first-child{ text-align:left; position:sticky; left:0; background:#fff; }
+  .roster select{ padding:5px 2px; border-radius:6px; border:2px solid #e5e7eb; font-size:12px; max-width:92px; }
+  .roster select.set{ border-color:#6366f1; font-weight:900; }
+  .roster td.today{ background:#eef2ff; }
   .grid2{ display:grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap:8px; }
   .fl{ display:flex; flex-direction:column; gap:3px; font-size:12.5px; font-weight:800; color:#374151; }
   .fl .field{ width:100%; }
@@ -121,6 +133,7 @@
   <div id="main" class="hidden">
     <div class="tabs">
       <button class="tab active" data-tab="punches" onclick="showTab('punches')">การตอกบัตร<span class="count hidden" id="reviewCount"></span></button>
+      <button class="tab" data-tab="shifts" onclick="showTab('shifts')">กะ</button>
       <button class="tab" data-tab="pay" onclick="showTab('pay')">เงิน</button>
       <button class="tab" data-tab="adv" onclick="showTab('adv')">เบิกเงิน<span class="count hidden" id="advCount"></span></button>
       <button class="tab" data-tab="staff" onclick="showTab('staff')">พนักงาน</button>
@@ -157,6 +170,42 @@
       <div class="hint">กด "แก้" เพื่อแก้เวลา / ปรับวันทำงาน (เต็มวัน/ครึ่งวัน) / ปรับโอทีของวันนั้น ✏️ = แอดมินแก้แล้ว</div>
       <div class="tableWrap"><table id="punchTable"></table></div>
       <div class="status" id="punchStatus"></div>
+    </div>
+
+    <!-- กะ -->
+    <div class="card hidden" data-panel="shifts">
+      <div class="cardTitle">ตารางกะรายสัปดาห์</div>
+      <div class="row">
+        <button class="btn" onclick="shiftWeek(-7)">‹ สัปดาห์ก่อน</button>
+        <span class="sub" id="rosterRange" style="flex:1; text-align:center;"></span>
+        <button class="btn" onclick="shiftWeek(7)">สัปดาห์ถัดไป ›</button>
+      </div>
+      <div class="hint">ตัวหนา/กรอบม่วง = จัดเองในตาราง · ตัวปกติ = ตามกะประจำ/กะตามวัน · เลือก "ตามปกติ" เพื่อยกเลิกที่จัดเอง</div>
+      <div class="tableWrap"><table class="roster" id="rosterTable"></table></div>
+      <div class="status" id="rosterStatus"></div>
+    </div>
+
+    <div class="card hidden" data-panel="shifts">
+      <div class="cardTitle">กะของสาขา</div>
+      <div class="hint">ตั้งกะครั้งเดียว แล้วไปเลือกกะประจำของแต่ละคนที่แท็บพนักงาน → 💰 (หรือตั้งค่าเริ่มต้นที่แท็บเงิน) เวลาออกน้อยกว่าเวลาเข้า = ข้ามเที่ยงคืน</div>
+      <div id="shiftList"></div>
+      <div class="cardTitle" style="margin-top:12px;" id="shiftFormTitle">+ เพิ่มกะ</div>
+      <div class="grid2">
+        <label class="fl">ชื่อกะ<input class="field" id="shName" placeholder="เช่น 🌅 กะเช้า"></label>
+        <label class="fl">สี<input class="field" id="shColor" type="color" value="#6366f1" style="height:40px;"></label>
+        <label class="fl">เวลาเข้า<input class="field" id="shStart" type="time" value="09:00"></label>
+        <label class="fl">เวลาออก<input class="field" id="shEnd" type="time" value="18:00"></label>
+        <label class="fl">เวลาพักของกะนี้
+          <select class="field" id="shBreakMode"><option value="">ใช้ค่าของคน/สาขา</option><option value="auto">หักอัตโนมัติ</option><option value="punch">ตอกพัก</option><option value="paid">พักได้เงิน</option></select>
+        </label>
+        <label class="fl">หักพักกี่นาที<input class="field" id="shBreakMin" type="number" min="0" placeholder="ใช้ค่าของคน/สาขา"></label>
+        <label class="fl">หักเมื่อทำเกินกี่ ชม.<input class="field" id="shBreakAfter" type="number" min="0" step="any" placeholder="ใช้ค่าของคน/สาขา"></label>
+      </div>
+      <div class="row" style="margin-top:8px;">
+        <button class="btn green" onclick="saveShift()">บันทึกกะ</button>
+        <button class="btn" onclick="newShiftForm()">ล้าง / เพิ่มใหม่</button>
+      </div>
+      <div class="status" id="shiftStatus"></div>
     </div>
 
     <!-- เงิน -->
@@ -315,6 +364,10 @@
     <div class="fl">เวลาเข้างาน<input class="field" id="edIn" type="datetime-local"></div>
     <div class="fl" style="margin-top:6px;">เวลาออกงาน (ว่าง = ยังทำงานอยู่)<input class="field" id="edOut" type="datetime-local"></div>
     <div class="grid2" style="margin-top:6px;">
+      <div class="fl">กะของวันนี้
+        <select class="field" id="edShift"></select>
+      </div>
+      <div class="fl">หักพัก (นาที)<input class="field" id="edBreak" type="number" min="0" step="5" placeholder="อัตโนมัติ"></div>
       <div class="fl">วันทำงาน (รายวัน)
         <select class="field" id="edDay"><option value="">อัตโนมัติ</option><option value="1">เต็มวัน</option><option value="0.5">ครึ่งวัน</option><option value="0">ไม่นับ</option></select>
       </div>
@@ -361,6 +414,10 @@
     bad_pay: "มีค่าที่ไม่ถูกต้อง",
     bad_period: "ตั้งรอบไม่ครบหรือไม่ถูกต้อง",
     bad_amount: "จำนวนเงินไม่ถูกต้อง",
+    bad_shift: "กะไม่ถูกต้อง",
+    bad_break: "เวลาพักไม่ถูกต้อง",
+    bad_shift_time: "เวลาเข้า/ออกของกะไม่ถูกต้อง",
+    bad_entry: "ข้อมูลตารางกะไม่ถูกต้อง",
     unknown_staff: "ไม่พบพนักงาน",
     not_found: "ไม่พบรายการนี้ (อาจถูกลบไปแล้ว)",
     already_setup: "ระบบตั้งค่าไปแล้ว ใช้รหัสแอดมินเดิมเข้าสู่ระบบ",
@@ -647,8 +704,16 @@
       tr.appendChild(proofCell(p.out_distance_m, p.out_accuracy_m, p.out_photo_url, b));
       tr.appendChild(el("td", "", p.check_out ? hoursBetween(p.check_in, p.check_out).toFixed(2) : ""));
       const adj = [];
+      const di = (j.day_info || {})[p.staff_id + "|" + p.work_date];
+      if (di){
+        if (di.shift) adj.push(di.shift.name + (di.shift_source === "auto" ? " (เดา)" : ""));
+        if (di.late_min) adj.push("สาย " + di.late_min + " น.");
+        if (di.early_min) adj.push("กลับก่อน " + di.early_min + " น.");
+        if (di.break_min) adj.push("พัก " + di.break_min + " น.");
+        if (di.ot_min) adj.push("โอที " + di.ot_min + " น.");
+      }
       if (p.day_override !== null && p.day_override !== undefined) adj.push(DAY_TEXT[String(p.day_override)]);
-      if (p.ot_override_min !== null && p.ot_override_min !== undefined) adj.push("โอที " + p.ot_override_min + " นาที");
+      if (p.ot_override_min !== null && p.ot_override_min !== undefined) adj.push("ปรับโอทีเอง");
       if (p.note) adj.push(p.note);
       tr.appendChild(el("td", "sub", adj.join(" · ")));
       table.appendChild(tr);
@@ -682,7 +747,9 @@
     forgot_out: "ลืมตอกออก",
     still_open: "ยังไม่ตอกออก นานเกิน 16 ชม.",
     long: "ทำงานยาวผิดปกติ (เกิน 14 ชม.)",
-    short: "สั้นมาก (ไม่ถึง 5 นาที) อาจกดผิด"
+    short: "สั้นมาก (ไม่ถึง 5 นาที) อาจกดผิด",
+    break_not_ended: "ลืมกดกลับจากพัก (ระบบปิดพักให้ตอนออกงาน)",
+    break_long: "พักนานเกินกำหนด"
   };
 
   function staffName(id){
@@ -764,6 +831,10 @@
     $("edDay").value = p && p.day_override !== null && p.day_override !== undefined ? String(p.day_override) : "";
     $("edOt").value = p && p.ot_override_min !== null && p.ot_override_min !== undefined ? p.ot_override_min : "";
     $("edNote").value = p ? (p.note || "") : "";
+    const es = $("edShift"); es.innerHTML = "";
+    [["", "อัตโนมัติ"]].concat(shiftOptions(), [["-1", "ไม่มีกะ"]]).forEach(([v, t]) => { const o = el("option", "", t); o.value = v; es.appendChild(o); });
+    es.value = p && p.shift_override !== null && p.shift_override !== undefined ? String(p.shift_override) : "";
+    $("edBreak").value = p && p.break_override_min !== null && p.break_override_min !== undefined ? p.break_override_min : "";
     $("edDelete").classList.toggle("hidden", !p);
     setMsg("edStatus", "");
     $("editor").classList.add("show");
@@ -780,7 +851,8 @@
   async function saveEditor(){
     const body = {
       admin_pin: adminPin, check_in: $("edIn").value, check_out: $("edOut").value,
-      day_override: $("edDay").value, ot_override_min: $("edOt").value, note: $("edNote").value.trim()
+      day_override: $("edDay").value, ot_override_min: $("edOt").value, note: $("edNote").value.trim(),
+      shift_override: $("edShift").value, break_override_min: $("edBreak").value
     };
     const j = editing
       ? await api(Object.assign({ action: "edit_punch", id: editing.id }, body))
@@ -809,17 +881,46 @@
     { k: "half_day_hours", label: "ทำไม่ถึงกี่ ชม. = ครึ่งวัน", show: e => e.pay_type === "daily" },
     { k: "min_day_hours", label: "ทำไม่ถึงกี่ ชม. = ไม่นับวัน", show: e => e.pay_type === "daily" },
     { group: "โอที" },
-    { k: "ot_mode", label: "นับโอทีเมื่อ", type: "select", options: [["none", "ไม่มีโอที"], ["after_hours", "ทำเกิน X ชม./วัน"], ["after_time", "ออกงานหลังเวลา Y"], ["both", "ทั้งสองแบบ (ใช้ค่าที่มากกว่า)"]] },
+    { k: "ot_mode", label: "นับโอทีเมื่อ", type: "select", options: [["none", "ไม่มีโอที"], ["after_hours", "ทำเกิน X ชม./วัน (หลังหักพัก)"], ["after_shift", "ออกหลังเวลาเลิกกะ"], ["after_time", "ออกงานหลังเวลา Y (เวลาเดียวทั้งร้าน)"], ["both", "เกิน X ชม. หรือหลังเลิกกะ/เวลา Y (ใช้ค่าที่มากกว่า)"]] },
     { k: "ot_after_hours", label: "เกินกี่ ชม./วัน", show: e => e.ot_mode === "after_hours" || e.ot_mode === "both" },
     { k: "ot_after_time", label: "หลังเวลา (HH:MM)", type: "time", show: e => e.ot_mode === "after_time" || e.ot_mode === "both" },
     { k: "ot_rate_type", label: "ค่าโอทีคิดแบบ", type: "select", options: [["multiplier", "ค่าแรงต่อชม. × ตัวคูณ"], ["fixed", "บาทต่อชั่วโมง"]], show: e => e.ot_mode !== "none" },
     { k: "ot_multiplier", label: "ตัวคูณ (เช่น 1.5)", show: e => e.ot_mode !== "none" && e.ot_rate_type === "multiplier" },
     { k: "ot_fixed_rate", label: "ค่าโอที บาท/ชม.", show: e => e.ot_mode !== "none" && e.ot_rate_type === "fixed" },
     { k: "ot_round_min", label: "ปัดลงทีละกี่นาที", show: e => e.ot_mode !== "none" },
-    { k: "ot_min_min", label: "ต้องเกินอย่างน้อยกี่นาทีถึงนับ", show: e => e.ot_mode !== "none" }
+    { k: "ot_min_min", label: "ต้องเกินอย่างน้อยกี่นาทีถึงนับ", show: e => e.ot_mode !== "none" },
+    { group: "เวลางาน / กะ" },
+    { k: "work_mode", label: "เวลางาน", type: "select", options: [["none", "ไม่กำหนด (นับตามเวลาตอกจริง)"], ["flexible", "ยืดหยุ่น: เข้ากี่โมงก็ได้ ครบ N ชม."], ["shift", "มีกะ (เข้า–ออกตามกะ)"]] },
+    { k: "default_shift_id", label: "กะประจำ", type: "shift", show: e => e.work_mode === "shift" },
+    { k: "weekday_shifts", label: "กะตามวัน (ว่าง = ใช้กะประจำ)", type: "weekdays", show: e => e.work_mode === "shift" },
+    { k: "auto_shift", label: "วันที่ไม่ได้กำหนดกะ ให้ระบบเดากะจากเวลาตอกเข้า", type: "bool", show: e => e.work_mode === "shift" },
+    { k: "count_early", label: "มาก่อนเวลากะ นับเป็นเวลางาน", type: "bool", show: e => e.work_mode === "shift" },
+    { group: "เวลาพัก" },
+    { k: "break_mode", label: "เวลาพัก", type: "select", options: [["auto", "หักอัตโนมัติ"], ["punch", "ตอกพัก (กดพัก/กลับจากพัก)"], ["paid", "พักได้เงิน (ไม่หัก)"]] },
+    { k: "break_min", label: "หักพักกี่นาที", show: e => e.break_mode === "auto" || (e.break_mode === "punch" && isTrue(e.break_fallback_auto)) },
+    { k: "break_after_hours", label: "หักเมื่อทำงานเกินกี่ ชม.", show: e => e.break_mode === "auto" || (e.break_mode === "punch" && isTrue(e.break_fallback_auto)) },
+    { k: "break_fallback_auto", label: "ลืมกดพักทั้งวัน → หักอัตโนมัติแทน", type: "bool", show: e => e.break_mode === "punch" },
+    { k: "break_min_deduct", label: "ตอกพัก: หักอย่างน้อยกี่นาที", show: e => e.break_mode === "punch" },
+    { k: "break_flag_min", label: "พักนานเกินกี่นาที → แจ้งตรวจ", show: e => e.break_mode === "punch" },
+    { group: "มาสาย (เทียบกับเวลาเข้ากะ)" },
+    { k: "late_deduct", label: "หักเงินมาสาย", type: "bool", show: e => e.work_mode === "shift" },
+    { k: "late_after_min", label: "สายเกินกี่นาทีถึงหัก", show: e => e.work_mode === "shift" && isTrue(e.late_deduct) },
+    { k: "late_mode", label: "หักแบบ", type: "select", options: [["per_minute", "ตามนาทีที่สาย (คิดจากค่าแรงต่อชม.)"], ["fixed", "บาทต่อครั้ง"]], show: e => e.work_mode === "shift" && isTrue(e.late_deduct) },
+    { k: "late_amount", label: "หักครั้งละ (บาท)", show: e => e.work_mode === "shift" && isTrue(e.late_deduct) && e.late_mode === "fixed" }
   ];
+  const WD_SHORT = ["อา.", "จ.", "อ.", "พ.", "พฤ.", "ศ.", "ส."];
+  function isTrue(v){ return v === true || v === "true"; }
+  function shiftOptions(){ return ((paySet && paySet.shifts) || []).map(x => [String(x.id), x.name + " " + x.start_time + "–" + x.end_time]); }
 
-  function optText(f, v){ const o = (f.options || []).find(x => x[0] === v); return o ? o[1] : v; }
+  function fieldOptions(f){
+    if (f.type === "bool") return [["true", "ใช่"], ["false", "ไม่"]];
+    if (f.type === "shift") return shiftOptions();
+    return f.options || [];
+  }
+  function optText(f, v){
+    if (v === null || v === undefined || v === "") return "ไม่มี";
+    const o = fieldOptions(f).find(x => x[0] === String(v)); return o ? o[1] : v;
+  }
 
   // own: ค่าที่ตั้งไว้ของระดับนี้ · inherited: ค่าที่ได้จากระดับบน (แสดงเป็นตัวจาง) · allowInherit: รายคน (ว่าง = ใช้ค่าสาขา)
   function payForm(own, inherited, allowInherit){
@@ -831,11 +932,39 @@
       if (f.group){ wrap.appendChild(el("div", "group", f.group)); grid = el("div", "grid2"); wrap.appendChild(grid); return; }
       const lab = el("label", "fl", f.label);
       let inp;
-      if (f.type === "select"){
+      if (f.type === "weekdays"){
+        // 7 ช่อง อา.–ส. แต่ละวันเลือกกะ / หยุด / ว่าง (ใช้กะประจำ)
+        lab.classList.add("wide");
+        const row = el("div", "wdRow");
+        const sels = [];
+        const ownW = own[f.k] || {};
+        const inhW = inherited[f.k] || {};
+        for (let d = 0; d < 7; d++){
+          const cell = el("div", "wdCell");
+          cell.appendChild(el("div", "sub", WD_SHORT[d]));
+          const sel = el("select", "field");
+          const blank = el("option", "", allowInherit && inhW[d] !== undefined ? "(สาขา)" : "—"); blank.value = ""; sel.appendChild(blank);
+          shiftOptions().forEach(([v, t]) => { const o = el("option", "", t.split(" ")[0]); o.value = v; o.title = t; sel.appendChild(o); });
+          const off = el("option", "", "หยุด"); off.value = "off"; sel.appendChild(off);
+          sel.value = ownW[d] !== undefined ? String(ownW[d]) : "";
+          sel.onchange = refresh;
+          sels.push(sel);
+          cell.appendChild(sel);
+          row.appendChild(cell);
+        }
+        lab.appendChild(row);
+        inputs[f.k] = { weekdays: sels, value: "x" };
+        grid.appendChild(lab);
+        groups.push([f, lab]);
+        return;
+      }
+      if (f.type === "select" || f.type === "bool" || f.type === "shift"){
         inp = el("select", "field");
         if (allowInherit){ const o = el("option", "", "ใช้ค่าสาขา (" + optText(f, inherited[f.k]) + ")"); o.value = ""; inp.appendChild(o); }
-        f.options.forEach(([v, t]) => { const o = el("option", "", t); o.value = v; inp.appendChild(o); });
-        inp.value = own[f.k] !== undefined ? own[f.k] : (allowInherit ? "" : inherited[f.k]);
+        else if (f.type === "shift"){ const o = el("option", "", "— ไม่มี —"); o.value = ""; inp.appendChild(o); }
+        fieldOptions(f).forEach(([v, t]) => { const o = el("option", "", t); o.value = v; inp.appendChild(o); });
+        const v = own[f.k] !== undefined ? own[f.k] : (allowInherit ? "" : inherited[f.k]);
+        inp.value = v === null || v === undefined ? "" : String(v);
       } else {
         inp = el("input", "field");
         inp.type = f.type === "time" ? "text" : "number";
@@ -852,14 +981,24 @@
     });
     function effective(){
       const e = Object.assign({}, inherited);
-      Object.keys(inputs).forEach(k => { if (inputs[k].value !== "") e[k] = inputs[k].type === "number" ? Number(inputs[k].value) : inputs[k].value; });
+      Object.keys(inputs).forEach(k => { if (!inputs[k].weekdays && inputs[k].value !== "") e[k] = inputs[k].type === "number" ? Number(inputs[k].value) : inputs[k].value; });
       return e;
     }
     function refresh(){ const e = effective(); groups.forEach(([f, lab]) => { lab.classList.toggle("hidden", !!(f.show && !f.show(e))); }); }
     refresh();
     return {
       node: wrap,
-      get(){ const out = {}; Object.keys(inputs).forEach(k => { if (inputs[k].value !== "") out[k] = inputs[k].value; }); return out; }
+      get(){
+        const out = {};
+        Object.keys(inputs).forEach(k => {
+          if (inputs[k].weekdays){
+            const w = {};
+            inputs[k].weekdays.forEach((sel, d) => { if (sel.value) w[d] = sel.value; });
+            if (Object.keys(w).length) out[k] = w;
+          } else if (inputs[k].value !== "") out[k] = inputs[k].value;
+        });
+        return out;
+      }
     };
   }
 
@@ -1007,6 +1146,119 @@
     return d;
   }
 
+
+  // ---------- กะ ----------
+
+  let editingShift = null;
+
+  function renderShiftList(){
+    const box = $("shiftList"); box.innerHTML = "";
+    const list = (paySet && paySet.shifts) || [];
+    if (!list.length) box.appendChild(el("div", "hint", "ยังไม่มีกะ เพิ่มกะแรกด้านล่าง"));
+    const bmText = { auto: "หักพักอัตโนมัติ", punch: "ตอกพัก", paid: "พักได้เงิน" };
+    list.forEach(sh => {
+      const row = el("div", "shiftRow");
+      const dot = el("span", "shiftDot"); dot.style.background = sh.color;
+      row.appendChild(dot);
+      const t = el("div"); t.style.flex = "1";
+      t.appendChild(el("div", "", sh.name + " · " + sh.start_time + "–" + sh.end_time + (sh.end_time <= sh.start_time ? " (ข้ามคืน)" : "")));
+      t.appendChild(el("div", "sub", sh.break_mode ? bmText[sh.break_mode] + (sh.break_min !== null ? " " + sh.break_min + " นาที" : "") : "พัก: ใช้ค่าของคน/สาขา"));
+      row.appendChild(t);
+      const ed = el("button", "btn", "แก้"); ed.onclick = () => fillShiftForm(sh);
+      const del = el("button", "btn", "ลบ"); del.style.color = "#b91c1c";
+      del.onclick = async () => {
+        if (!confirm("ลบกะ \"" + sh.name + "\"? (วันที่ทำไปแล้วยังใช้กะนี้คิดเงินเหมือนเดิม)")) return;
+        const j = await api({ action: "delete_shift", admin_pin: adminPin, id: sh.id });
+        if (!j || !j.ok){ setMsg("shiftStatus", errText(j), false); return; }
+        await loadPaySettings(); renderShiftList(); loadRoster();
+      };
+      row.append(ed, del);
+      box.appendChild(row);
+    });
+  }
+
+  function fillShiftForm(sh){
+    editingShift = sh;
+    $("shiftFormTitle").textContent = "แก้กะ: " + sh.name;
+    $("shName").value = sh.name; $("shColor").value = sh.color || "#6366f1";
+    $("shStart").value = sh.start_time; $("shEnd").value = sh.end_time;
+    $("shBreakMode").value = sh.break_mode || "";
+    $("shBreakMin").value = sh.break_min ?? ""; $("shBreakAfter").value = sh.break_after_hours ?? "";
+    setMsg("shiftStatus", "");
+  }
+
+  function newShiftForm(){
+    editingShift = null;
+    $("shiftFormTitle").textContent = "+ เพิ่มกะ";
+    $("shName").value = ""; $("shColor").value = "#6366f1"; $("shStart").value = "09:00"; $("shEnd").value = "18:00";
+    $("shBreakMode").value = ""; $("shBreakMin").value = ""; $("shBreakAfter").value = "";
+  }
+
+  async function saveShift(){
+    const j = await api({
+      action: "save_shift", admin_pin: adminPin, branch_id: branchId, id: editingShift ? editingShift.id : 0,
+      name: $("shName").value.trim(), color: $("shColor").value, start_time: $("shStart").value, end_time: $("shEnd").value,
+      break_mode: $("shBreakMode").value, break_min: $("shBreakMin").value, break_after_hours: $("shBreakAfter").value
+    });
+    if (!j || !j.ok){ setMsg("shiftStatus", errText(j), false); return; }
+    await loadPaySettings(); renderShiftList(); newShiftForm(); loadRoster();
+    setMsg("shiftStatus", "บันทึกกะแล้ว", true);
+  }
+
+  // ---------- ตารางกะรายสัปดาห์ ----------
+
+  let rosterStart = "";
+
+  function weekStart(d){ const dt = new Date(d + "T00:00:00"); dt.setDate(dt.getDate() - dt.getDay()); return localDateStr(dt); }
+  function addD(d, n){ const dt = new Date(d + "T00:00:00"); dt.setDate(dt.getDate() + n); return localDateStr(dt); }
+  function shiftWeek(n){ rosterStart = addD(rosterStart, n); loadRoster(); }
+
+  async function loadRoster(){
+    if (!branchId || !adminPin) return;
+    if (!rosterStart) rosterStart = weekStart(localDateStr(new Date()));
+    const end = addD(rosterStart, 6);
+    $("rosterRange").textContent = thDate(rosterStart) + " – " + thDate(end);
+    const j = await api({ action: "get_roster", admin_pin: adminPin, branch_id: branchId, from: rosterStart, to: end });
+    const t = $("rosterTable"); t.innerHTML = "";
+    if (!j || !j.ok){ setMsg("rosterStatus", errText(j), false); return; }
+    if (!j.shifts.length){ setMsg("rosterStatus", "ยังไม่มีกะ เพิ่มกะในกล่องด้านล่างก่อน"); return; }
+    setMsg("rosterStatus", "");
+    const head = el("tr"); head.appendChild(el("th", "", "พนักงาน"));
+    const today = localDateStr(new Date());
+    for (let i = 0; i < 7; i++){
+      const d = addD(rosterStart, i);
+      head.appendChild(el("th", d === today ? "today" : "", WD_SHORT[i] + " " + Number(d.slice(8))));
+    }
+    t.appendChild(head);
+    const nameOf = id => { const x = j.shifts.find(s => s.id === id); return x ? x.name : ""; };
+    j.staff.forEach(person => {
+      const tr = el("tr");
+      const nm = el("td", "", person.label);
+      if (person.work_mode !== "shift") nm.appendChild(el("div", "sub", "ไม่ได้ใช้กะ"));
+      tr.appendChild(nm);
+      for (let i = 0; i < 7; i++){
+        const d = addD(rosterStart, i);
+        const c = j.cells[person.id + "|" + d] || {};
+        const td = el("td", d === today ? "today" : "");
+        const sel = el("select", c.set ? "set" : "");
+        const usual = c.set ? "ตามปกติ" : (c.shift_id ? nameOf(c.shift_id) : (String(c.source).endsWith("_off") ? "หยุด" : "—"));
+        const o0 = el("option", "", c.set ? "↺ ตามปกติ" : usual); o0.value = "clear"; sel.appendChild(o0);
+        j.shifts.forEach(sh => { const o = el("option", "", sh.name); o.value = String(sh.id); sel.appendChild(o); });
+        const off = el("option", "", "หยุด"); off.value = "off"; sel.appendChild(off);
+        sel.value = c.set ? (c.shift_id ? String(c.shift_id) : "off") : "clear";
+        if (person.work_mode !== "shift") sel.disabled = true;
+        sel.onchange = async () => {
+          const r = await api({ action: "set_roster", admin_pin: adminPin, branch_id: branchId, entries: [{ staff_id: person.id, date: d, shift: sel.value }] });
+          if (!r || !r.ok){ setMsg("rosterStatus", errText(r), false); return; }
+          loadRoster();
+        };
+        td.appendChild(sel);
+        tr.appendChild(td);
+      }
+      t.appendChild(tr);
+    });
+  }
+
   // ---------- ยอดเงินรอบนี้ ----------
 
   function baht(n){ return Number(n || 0).toLocaleString("th-TH", { minimumFractionDigits: Number(n) % 1 ? 2 : 0, maximumFractionDigits: 2 }); }
@@ -1037,6 +1289,8 @@
         ["วันทำงาน", String(t.days_worked)], ["หยุด", String(t.days_off)],
         ["ชั่วโมงงาน", String(t.worked_hours)], ["ชม.โอที", String(t.ot_hours)],
         ["ค่าแรง", baht(t.base)], ["โอที", baht(t.ot_pay)],
+        ["มาสาย", t.late_times ? t.late_times + " ครั้ง / " + t.late_min + " น." : "0"], ["หักสาย", (t.late_deduct ? "−" : "") + baht(t.late_deduct)],
+        ["ชม.พัก", String(t.break_hours || 0)], ["กลับก่อน", (t.early_min || 0) + " น."],
         ["เบิก", (t.advances ? "−" : "") + baht(t.advances)], ["รออนุมัติ", baht(t.pending)]
       ]);
       Object.keys(tot).forEach(k => { tot[k] += Number(t[k] || 0); });
@@ -1208,6 +1462,7 @@
     document.querySelectorAll("[data-panel]").forEach(p => p.classList.toggle("hidden", p.dataset.panel !== name));
     if (name === "lang") loadUiRows();
     if (name === "pay"){ loadPaySettings(); loadPaySummary(); }
+    if (name === "shifts"){ loadPaySettings().then(() => { renderShiftList(); loadRoster(); }); }
     if (name === "adv"){ loadPaySettings(); loadAdvances(); }
   }
 

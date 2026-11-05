@@ -1,6 +1,6 @@
 // Edge Function "clock" — ระบบตอกบัตร (ใช้ Supabase project เดียวกับปฏิทินได้ หรือใช้เดี่ยวๆ ก็ได้)
 //
-// Database: run supabase/migrations/0001_clock.sql, 0002_gps_photo.sql, 0003_pay.sql, 0004_security.sql in order.
+// Database: run supabase/migrations/0001_clock.sql … 0005_shifts.sql in order.
 // Deploy: Supabase Dashboard -> Edge Functions -> create function named "clock" ->
 // paste this file's contents -> Deploy -> แท็บ Settings -> ปิด "Verify JWT with legacy secret"
 //
@@ -650,7 +650,7 @@ async function handleToday(p: Record<string, unknown>) {
     calendarMessages(branchId, localDate(new Date()), lang),
     calendarWeek(branchId, lang),
   ]);
-  return json({ ok: true, date: localDate(new Date()), punches: punches.map(publicPunch), messages, week });
+  return json({ ok: true, date: localDate(new Date()), punches: await publicPunches(branchId, punches), messages, week });
 }
 
 function publicPunch(r: Punch) {
@@ -711,7 +711,7 @@ async function handlePunch(p: Record<string, unknown>) {
   if (!kb) return json({ ok: false, error: "bad_link" });
   const branchId = kb.id;
   const staffId = Number(p.staff_id) || 0;
-  const type = p.type === "out" ? "out" : "in";
+  const type = ["out", "break_start", "break_end"].includes(String(p.type)) ? String(p.type) : "in";
   const pin = String(p.pin ?? "").trim();
   const lang = cleanLang(p.lang);
   if (!/^\d{4,6}$/.test(pin)) return json({ ok: false, error: "pin_invalid" });
@@ -721,6 +721,7 @@ async function handlePunch(p: Record<string, unknown>) {
   if (!person || !person.active || person.branch_id !== branchId) return json({ ok: false, error: "unknown_staff" });
   const pinErr = await staffPinError(person, pin);
   if (pinErr) return json({ ok: false, error: pinErr });
+  if (type === "break_start" || type === "break_end") return punchBreak(branchId, staffId, type, lang);
 
   const { data: branch } = await supabase.from("branches")
     .select("id, lat, lng, radius_m, require_gps, require_photo").eq("id", branchId).maybeSingle();
@@ -777,8 +778,11 @@ async function handlePunch(p: Record<string, unknown>) {
     if (!data) return json({ ok: false, error: "not_in" });
     punch = data as Punch;
     status = "ok_out";
+    // Forgot to come back from break: close it now and flag it for the admin
+    await supabase.from("breaks").update({ end_at: now.toISOString(), auto_closed: true }).eq("punch_id", open.id).is("end_at", null);
   }
   const distance = loc.distance;
+  const day = await dayForStaff(branchId, staffId, punch.work_date);
 
   const [punches, messages, duties] = await Promise.all([
     todayPunches(branchId),
@@ -787,8 +791,75 @@ async function handlePunch(p: Record<string, unknown>) {
   ]);
   return json({
     ok: true, status, punch: publicPunch(punch), staff_name: person.name, distance,
-    punches: punches.map(publicPunch), messages, my_duties: duties,
+    day: day ? { shift: day.shift, late_min: day.late_min, early_min: day.early_min, worked_min: day.worked_min, break_min: day.break_min, ot_min: day.ot_min } : null,
+    punches: await publicPunches(branchId, punches), messages, my_duties: duties,
   });
+}
+
+// ☕ Break start / end (only while clocked in)
+async function punchBreak(branchId: string, staffId: number, type: string, lang: Lang) {
+  const now = new Date().toISOString();
+  const { data: openRows } = await supabase.from("punches").select("*")
+    .eq("staff_id", staffId).is("check_out", null).eq("forgot_out", false);
+  const open = (openRows ?? [])[0] as Punch | undefined;
+  if (!open) return json({ ok: false, error: "not_in" });
+  const { data: openBreak } = await supabase.from("breaks").select("*").eq("punch_id", open.id).is("end_at", null).maybeSingle();
+  if (type === "break_start") {
+    if (openBreak) return json({ ok: false, error: "already_on_break", since: openBreak.start_at });
+    const { error } = await supabase.from("breaks").insert({ punch_id: open.id, start_at: now });
+    if (error) {
+      const dup = error.code === "23505" || String(error.message).includes("duplicate");
+      return json({ ok: false, error: dup ? "already_on_break" : error.message });
+    }
+  } else {
+    if (!openBreak) return json({ ok: false, error: "not_on_break" });
+    await supabase.from("breaks").update({ end_at: now }).eq("id", openBreak.id);
+  }
+  const punches = await todayPunches(branchId);
+  return json({
+    ok: true, status: type === "break_start" ? "ok_break_start" : "ok_break_end", at: now,
+    break_min: openBreak ? Math.round((Date.parse(now) - Date.parse(openBreak.start_at)) / 60000) : 0,
+    punches: await publicPunches(branchId, punches),
+  });
+}
+
+// One person's computed day (shift, late, break...) for the clock-in/out message.
+async function dayForStaff(branchId: string, staffId: number, date: string) {
+  try {
+    const b = await loadBranch(branchId);
+    const { data: person } = await supabase.from("staff").select("id, pay").eq("id", staffId).maybeSingle();
+    const { data: rows } = await supabase.from("punches").select("*").eq("staff_id", staffId).eq("work_date", date).order("check_in");
+    const list = (rows ?? []) as PunchRow[];
+    const sc = await loadShiftContext(branchId, [staffId], date, date, list.map((r) => r.id));
+    return computeStaffDay(effectivePay(b?.pay_defaults, person?.pay), staffId, date, list, sc);
+  } catch (e) {
+    console.error("dayForStaff failed", e);
+    return null;
+  }
+}
+
+// Today's shifts for the public list, with "on break" and whether the person punches breaks.
+async function publicPunches(branchId: string, punches: Punch[]) {
+  if (!punches.length) return [];
+  const open = punches.filter((r) => !r.check_out && !r.forgot_out);
+  const ids = open.map((r) => r.id);
+  const { data: brs } = ids.length ? await supabase.from("breaks").select("punch_id").in("punch_id", ids).is("end_at", null) : { data: [] };
+  const onBreak = new Set((brs ?? []).map((x) => x.punch_id));
+  const breakPunch = new Set<number>();
+  if (open.length) {
+    const b = await loadBranch(branchId);
+    const staffIds = [...new Set(open.map((r) => r.staff_id))];
+    const { data: people } = await supabase.from("staff").select("id, pay").in("id", staffIds);
+    const date = localDate(new Date());
+    const sc = await loadShiftContext(branchId, staffIds, date, date, []);
+    for (const r of open) {
+      const rules = effectivePay(b?.pay_defaults, (people ?? []).find((x) => x.id === r.staff_id)?.pay);
+      const { shift } = resolveShift(rules, sc.shifts, sc.rosterMap.has(`${r.staff_id}|${r.work_date}`) ? sc.rosterMap.get(`${r.staff_id}|${r.work_date}`) : undefined,
+        r.work_date, Date.parse(r.check_in), (r as PunchRow).shift_override);
+      if ((shift?.break_mode ?? rules.break_mode) === "punch") breakPunch.add(r.id);
+    }
+  }
+  return punches.map((r) => ({ ...publicPunch(r), on_break: onBreak.has(r.id), break_punch: breakPunch.has(r.id) }));
 }
 
 // Central admin. Shifts of a branch between two dates (inclusive), for the admin page.
@@ -803,6 +874,30 @@ async function handlePunchesRange(p: Record<string, unknown>) {
     .eq("branch_id", branchId).gte("work_date", from).lte("work_date", to).order("work_date").order("check_in");
   if (error) return json({ ok: false, error: error.message });
   const rows = (data ?? []) as Array<Record<string, unknown>>;
+  // Shift, lateness and break per person per day
+  const dayInfo: Record<string, unknown> = {};
+  const breaksAll: BreakRow[] = [];
+  if (rows.length) {
+    const b = await loadBranch(branchId);
+    const staffIds = [...new Set(rows.map((r) => Number(r.staff_id)))];
+    const { data: people } = await supabase.from("staff").select("id, pay").in("id", staffIds);
+    const sc = await loadShiftContext(branchId, staffIds, from, to, rows.map((r) => Number(r.id)));
+    breaksAll.push(...sc.breaks);
+    const groups = new Map<string, PunchRow[]>();
+    for (const r of rows as unknown as PunchRow[]) {
+      const k = `${r.staff_id}|${r.work_date}`;
+      groups.set(k, [...(groups.get(k) ?? []), r]);
+    }
+    for (const [k, list] of groups) {
+      const [sid, date] = k.split("|");
+      const person = (people ?? []).find((x) => x.id === Number(sid));
+      const rules = effectivePay(b?.pay_defaults, person?.pay);
+      const d = computeStaffDay(rules, Number(sid), date, list, sc);
+      dayInfo[k] = { shift: d.shift, shift_source: d.shift_source, late_min: d.late_min, early_min: d.early_min,
+        break_min: d.break_min, break_actual_min: d.break_actual_min, break_mode: d.break_mode,
+        worked_min: d.worked_min, ot_min: d.ot_min, day: d.day };
+    }
+  }
   // Short-lived links to the photos (the bucket is private)
   const paths = rows.flatMap((r) => [r.in_photo, r.out_photo]).filter(Boolean) as string[];
   const urls = new Map<string, string>();
@@ -812,9 +907,11 @@ async function handlePunchesRange(p: Record<string, unknown>) {
   }
   return json({
     ok: true,
+    day_info: dayInfo,
     punches: rows.map((r) => ({
       ...withLocal(r as PunchRow),
-      flags: flagsOf(r as PunchRow),
+      flags: flagsOf(r as PunchRow, breaksAll),
+      breaks: breaksAll.filter((x) => x.punch_id === r.id),
       in_photo_url: r.in_photo ? urls.get(String(r.in_photo)) ?? null : null,
       out_photo_url: r.out_photo ? urls.get(String(r.out_photo)) ?? null : null,
     })),
@@ -981,15 +1078,20 @@ function periodFor(hist: PeriodHist | null | undefined, d: string): { start: str
 }
 
 // ============================================================
-// Pay rules (ค่าแรง / โอที)
+// Pay rules (ค่าแรง / โอที / กะ / พัก / มาสาย)
 // ============================================================
 
 type Pay = {
   pay_type: "daily" | "hourly"; daily_rate: number; hourly_rate: number;
   std_hours: number; half_day_hours: number; min_day_hours: number;
-  ot_mode: "none" | "after_hours" | "after_time" | "both"; ot_after_hours: number; ot_after_time: string;
+  ot_mode: "none" | "after_hours" | "after_time" | "after_shift" | "both"; ot_after_hours: number; ot_after_time: string;
   ot_rate_type: "multiplier" | "fixed"; ot_multiplier: number; ot_fixed_rate: number;
   ot_round_min: number; ot_min_min: number;
+  work_mode: "none" | "flexible" | "shift"; default_shift_id: number | null;
+  weekday_shifts: Record<string, number | "off">; auto_shift: boolean; count_early: boolean;
+  break_mode: "auto" | "punch" | "paid"; break_min: number; break_after_hours: number;
+  break_min_deduct: number; break_flag_min: number; break_fallback_auto: boolean;
+  late_deduct: boolean; late_after_min: number; late_mode: "per_minute" | "fixed"; late_amount: number;
 };
 
 const PAY_DEFAULTS: Pay = {
@@ -998,16 +1100,20 @@ const PAY_DEFAULTS: Pay = {
   ot_mode: "none", ot_after_hours: 8, ot_after_time: "20:00",
   ot_rate_type: "multiplier", ot_multiplier: 1.5, ot_fixed_rate: 0,
   ot_round_min: 15, ot_min_min: 30,
+  work_mode: "none", default_shift_id: null, weekday_shifts: {}, auto_shift: true, count_early: false,
+  break_mode: "paid", break_min: 60, break_after_hours: 6, break_min_deduct: 0, break_flag_min: 90, break_fallback_auto: true,
+  late_deduct: false, late_after_min: 15, late_mode: "per_minute", late_amount: 0,
 };
 
-const PAY_FIELDS: Record<string, { kind: "num" | "enum" | "time"; min?: number; max?: number; values?: string[] }> = {
+type FieldRule = { kind: "num" | "enum" | "time" | "bool" | "id" | "weekdays"; min?: number; max?: number; values?: string[] };
+const PAY_FIELDS: Record<string, FieldRule> = {
   pay_type: { kind: "enum", values: ["daily", "hourly"] },
   daily_rate: { kind: "num", min: 0, max: 100000 },
   hourly_rate: { kind: "num", min: 0, max: 10000 },
   std_hours: { kind: "num", min: 1, max: 24 },
   half_day_hours: { kind: "num", min: 0, max: 24 },
   min_day_hours: { kind: "num", min: 0, max: 24 },
-  ot_mode: { kind: "enum", values: ["none", "after_hours", "after_time", "both"] },
+  ot_mode: { kind: "enum", values: ["none", "after_hours", "after_time", "after_shift", "both"] },
   ot_after_hours: { kind: "num", min: 0, max: 24 },
   ot_after_time: { kind: "time" },
   ot_rate_type: { kind: "enum", values: ["multiplier", "fixed"] },
@@ -1015,7 +1121,28 @@ const PAY_FIELDS: Record<string, { kind: "num" | "enum" | "time"; min?: number; 
   ot_fixed_rate: { kind: "num", min: 0, max: 10000 },
   ot_round_min: { kind: "num", min: 1, max: 120 },
   ot_min_min: { kind: "num", min: 0, max: 600 },
+  work_mode: { kind: "enum", values: ["none", "flexible", "shift"] },
+  default_shift_id: { kind: "id" },
+  weekday_shifts: { kind: "weekdays" },
+  auto_shift: { kind: "bool" },
+  count_early: { kind: "bool" },
+  break_mode: { kind: "enum", values: ["auto", "punch", "paid"] },
+  break_min: { kind: "num", min: 0, max: 600 },
+  break_after_hours: { kind: "num", min: 0, max: 24 },
+  break_min_deduct: { kind: "num", min: 0, max: 600 },
+  break_flag_min: { kind: "num", min: 1, max: 1440 },
+  break_fallback_auto: { kind: "bool" },
+  late_deduct: { kind: "bool" },
+  late_after_min: { kind: "num", min: 0, max: 600 },
+  late_mode: { kind: "enum", values: ["per_minute", "fixed"] },
+  late_amount: { kind: "num", min: 0, max: 100000 },
 };
+
+function cleanTime(v: unknown): string | null {
+  const m = /^(\d{1,2}):(\d{2})$/.exec(String(v ?? "").trim());
+  if (!m || +m[1] > 23 || +m[2] > 59) return null;
+  return `${m[1].padStart(2, "0")}:${m[2]}`;
+}
 
 // Keeps only known fields with valid values. Empty string / null = "not set" (inherit).
 function cleanPay(raw: Record<string, unknown>): { pay: Record<string, unknown>; bad: string[] } {
@@ -1029,9 +1156,27 @@ function cleanPay(raw: Record<string, unknown>): { pay: Record<string, unknown>;
       if (!Number.isFinite(n) || n < (rule.min as number) || n > (rule.max as number)) bad.push(k); else pay[k] = n;
     } else if (rule.kind === "enum") {
       if (!(rule.values as string[]).includes(String(v))) bad.push(k); else pay[k] = String(v);
+    } else if (rule.kind === "time") {
+      const t = cleanTime(v);
+      if (!t) bad.push(k); else pay[k] = t;
+    } else if (rule.kind === "bool") {
+      const s = String(v).toLowerCase();
+      if (["true", "1", "yes"].includes(s)) pay[k] = true;
+      else if (["false", "0", "no"].includes(s)) pay[k] = false;
+      else bad.push(k);
+    } else if (rule.kind === "id") {
+      const n = Math.round(Number(v));
+      if (!Number.isFinite(n) || n <= 0) bad.push(k); else pay[k] = n;
     } else {
-      const m = /^(\d{1,2}):(\d{2})$/.exec(String(v));
-      if (!m || +m[1] > 23 || +m[2] > 59) bad.push(k); else pay[k] = `${m[1].padStart(2, "0")}:${m[2]}`;
+      // weekdays: { "0": shiftId | "off", ... "6": ... } (Sunday = 0); missing day = use the rest of the rules
+      if (typeof v !== "object") { bad.push(k); continue; }
+      const out: Record<string, number | "off"> = {};
+      for (const [d, val] of Object.entries(v as Record<string, unknown>)) {
+        if (!/^[0-6]$/.test(d) || val === "" || val === null || val === undefined) continue;
+        if (val === "off") out[d] = "off";
+        else { const n = Math.round(Number(val)); if (Number.isFinite(n) && n > 0) out[d] = n; else bad.push(k); }
+      }
+      if (Object.keys(out).length) pay[k] = out;
     }
   }
   return { pay, bad };
@@ -1043,36 +1188,130 @@ function effectivePay(branchDefaults: unknown, staffPay: unknown): Pay {
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
 
-type PunchRow = Punch & { day_override: number | null; ot_override_min: number | null; review_ok: boolean; created_by: string };
+type PunchRow = Punch & {
+  day_override: number | null; ot_override_min: number | null; review_ok: boolean; created_by: string;
+  shift_override?: number | null; break_override_min?: number | null;
+};
+type Shift = {
+  id: number; branch_id: string; name: string; start_time: string; end_time: string;
+  break_mode: string | null; break_min: number | null; break_after_hours: number | null; color: string; active: boolean;
+};
+type BreakRow = { id: number; punch_id: number; start_at: string; end_at: string | null; auto_closed: boolean };
 
-// One person's day: worked minutes, day fraction, OT minutes and money.
-function computeDay(rules: Pay, shifts: PunchRow[], date: string) {
-  const closed = shifts.filter((s) => s.check_out);
-  const worked = closed.reduce((m, s) => m + Math.max(0, (Date.parse(s.check_out as string) - Date.parse(s.check_in)) / 60000), 0);
-  const workedMin = Math.floor(worked);
+// Shift start/end on a date (an end at or before the start means it ends the next day).
+function shiftWindow(sh: Shift, date: string): { start: number; end: number } {
+  const start = localToUtc(`${date}T${sh.start_time}`)?.getTime() ?? 0;
+  let end = localToUtc(`${date}T${sh.end_time}`)?.getTime() ?? 0;
+  if (end <= start) end = localToUtc(`${addDays(date, 1)}T${sh.end_time}`)?.getTime() ?? end;
+  return { start, end };
+}
+
+const AUTO_SHIFT_WINDOW_MIN = 240; // the guessed shift must start within 4 hours of the clock-in
+
+// Which shift a person works on a date. Order: admin's pick for that day → weekly roster
+// → weekday pattern → their usual shift → guess from the clock-in time → none.
+function resolveShift(
+  rules: Pay, shifts: Shift[], rosterShift: number | null | undefined, date: string,
+  firstIn: number | null, override: number | null | undefined,
+): { shift: Shift | null; source: string } {
+  const byId = (id: unknown) => shifts.find((s) => s.id === Number(id)) ?? null;
+  if (override !== null && override !== undefined) {
+    return Number(override) === -1 ? { shift: null, source: "admin_none" } : { shift: byId(override), source: "admin" };
+  }
+  if (rules.work_mode !== "shift") return { shift: null, source: "none" };
+  if (rosterShift !== undefined) return rosterShift === null ? { shift: null, source: "roster_off" } : { shift: byId(rosterShift), source: "roster" };
+  const nearest = (): Shift | null => {
+    if (!rules.auto_shift || firstIn === null) return null;
+    let best: Shift | null = null, bestDiff = Infinity;
+    for (const s of shifts.filter((x) => x.active)) {
+      const diff = Math.abs(firstIn - shiftWindow(s, date).start) / 60000;
+      if (diff < bestDiff) { best = s; bestDiff = diff; }
+    }
+    return best && bestDiff <= AUTO_SHIFT_WINDOW_MIN ? best : null;
+  };
+  // The usual shift, unless the person clearly came for another one (more than 4 hours away)
+  const planned = (sh: Shift | null, source: string) => {
+    if (sh && rules.auto_shift && firstIn !== null && Math.abs(firstIn - shiftWindow(sh, date).start) / 60000 > AUTO_SHIFT_WINDOW_MIN) {
+      const n = nearest();
+      if (n) return { shift: n, source: "auto" };
+    }
+    return { shift: sh, source };
+  };
+  const wd = String(new Date(date + "T00:00:00Z").getUTCDay());
+  const w = rules.weekday_shifts?.[wd];
+  if (w === "off") return { shift: null, source: "weekday_off" };
+  if (w && byId(w)) return planned(byId(w), "weekday");
+  if (rules.default_shift_id && byId(rules.default_shift_id)) return planned(byId(rules.default_shift_id), "default");
+  const n = nearest();
+  if (n) return { shift: n, source: "auto" };
+  return { shift: null, source: "none" };
+}
+
+// One person's day: worked minutes (after break), day fraction, lateness, OT and money.
+function computeDay(
+  rules: Pay, punches: PunchRow[], date: string,
+  ctx: { shift?: Shift | null; shiftSource?: string; breaks?: BreakRow[] } = {},
+) {
+  const shift = ctx.shift ?? null;
+  const win = shift ? shiftWindow(shift, date) : null;
+  const closed = punches.filter((s) => s.check_out);
+  const firstIn = punches.length ? Math.min(...punches.map((p) => Date.parse(p.check_in))) : null;
+  const lastOut = closed.length ? Math.max(...closed.map((p) => Date.parse(p.check_out as string))) : null;
+
+  // Time at work, counted from the shift start when coming early doesn't count
+  let rawMin = 0;
+  for (const s of closed) {
+    let a = Date.parse(s.check_in);
+    const b = Date.parse(s.check_out as string);
+    if (win && !rules.count_early) a = Math.max(a, win.start);
+    rawMin += Math.max(0, (b - a) / 60000);
+  }
+  rawMin = Math.floor(rawMin);
+
+  // Break
+  const bMode = (shift?.break_mode ?? rules.break_mode) as Pay["break_mode"];
+  const bMin = shift?.break_min ?? rules.break_min;
+  const bAfter = shift?.break_after_hours ?? rules.break_after_hours;
+  const autoBreak = rawMin > bAfter * 60 ? bMin : 0;
+  const myBreaks = (ctx.breaks ?? []).filter((x) => closed.some((p) => p.id === x.punch_id));
+  const actualBreak = Math.floor(myBreaks.reduce((m, x) => {
+    const end = x.end_at ? Date.parse(x.end_at) : null;
+    return m + (end ? Math.max(0, (end - Date.parse(x.start_at)) / 60000) : 0);
+  }, 0));
+  let breakAuto = 0;
+  if (bMode === "auto") breakAuto = autoBreak;
+  else if (bMode === "punch") breakAuto = myBreaks.length ? Math.max(actualBreak, rules.break_min_deduct) : (rules.break_fallback_auto ? autoBreak : 0);
+  const bOverride = punches.find((p) => p.break_override_min !== null && p.break_override_min !== undefined)?.break_override_min;
+  const breakMin = Math.min(rawMin, bOverride !== undefined && bOverride !== null ? Number(bOverride) : breakAuto);
+  const workedMin = Math.max(0, rawMin - breakMin);
   const hours = workedMin / 60;
 
+  // Late / early leave (shift days only)
+  const lateMin = win && firstIn !== null ? Math.max(0, Math.floor((firstIn - win.start) / 60000)) : 0;
+  const earlyMin = win && lastOut !== null && !punches.some((p) => !p.check_out && !p.forgot_out)
+    ? Math.max(0, Math.floor((win.end - lastOut) / 60000)) : 0;
+
   // OT before rounding
-  let otRaw = 0;
   const afterHours = Math.max(0, workedMin - rules.ot_after_hours * 60);
-  let afterTime = 0;
-  const threshold = localToUtc(`${date}T${rules.ot_after_time}`)?.getTime() ?? Infinity;
-  for (const s of closed) {
+  const minutesAfter = (t: number) => closed.reduce((m, s) => {
     const a = Date.parse(s.check_in), b = Date.parse(s.check_out as string);
-    afterTime += Math.max(0, (b - Math.max(a, threshold)) / 60000);
-  }
+    return m + Math.max(0, (b - Math.max(a, t)) / 60000);
+  }, 0);
+  const afterTime = minutesAfter(localToUtc(`${date}T${rules.ot_after_time}`)?.getTime() ?? Infinity);
+  let otRaw = 0;
   if (rules.ot_mode === "after_hours") otRaw = afterHours;
   else if (rules.ot_mode === "after_time") otRaw = afterTime;
-  else if (rules.ot_mode === "both") otRaw = Math.max(afterHours, afterTime); // same minutes are never paid twice
+  else if (rules.ot_mode === "after_shift") otRaw = win ? minutesAfter(win.end) : afterHours; // no shift that day: hours rule
+  else if (rules.ot_mode === "both") otRaw = Math.max(afterHours, win ? minutesAfter(win.end) : afterTime); // never paid twice
   let otAuto = Math.floor(otRaw / rules.ot_round_min) * rules.ot_round_min;
   if (otAuto < rules.ot_min_min) otAuto = 0;
-  const overrides = shifts.filter((s) => s.ot_override_min !== null && s.ot_override_min !== undefined);
+  const overrides = punches.filter((s) => s.ot_override_min !== null && s.ot_override_min !== undefined);
   const otMin = overrides.length ? overrides.reduce((m, s) => m + Number(s.ot_override_min), 0) : otAuto;
 
   // Day fraction (daily pay)
   let dayAuto = 0;
   if (workedMin > 0) dayAuto = hours < rules.min_day_hours ? 0 : hours < rules.half_day_hours ? 0.5 : 1;
-  const dayOverride = shifts.find((s) => s.day_override !== null && s.day_override !== undefined)?.day_override;
+  const dayOverride = punches.find((s) => s.day_override !== null && s.day_override !== undefined)?.day_override;
   const day = dayOverride !== undefined && dayOverride !== null ? Number(dayOverride) : dayAuto;
 
   const baseHourly = rules.pay_type === "hourly" ? rules.hourly_rate : rules.daily_rate / rules.std_hours;
@@ -1081,12 +1320,41 @@ function computeDay(rules: Pay, shifts: PunchRow[], date: string) {
   if (rules.pay_type === "hourly") base = Math.max(0, workedMin - otMin) / 60 * rules.hourly_rate;
   else base = day * rules.daily_rate;
   const otPay = otMin / 60 * otRate;
+  let lateDeduct = 0;
+  if (rules.late_deduct && lateMin > rules.late_after_min) {
+    lateDeduct = rules.late_mode === "fixed" ? rules.late_amount : lateMin * baseHourly / 60;
+  }
 
   return {
-    date, worked_min: workedMin, day: rules.pay_type === "hourly" ? (workedMin > 0 ? 1 : 0) : day, day_auto: dayAuto,
+    date, worked_min: workedMin, raw_min: rawMin, break_min: breakMin, break_actual_min: actualBreak, break_mode: bMode,
+    day: rules.pay_type === "hourly" ? (workedMin > 0 ? 1 : 0) : day, day_auto: dayAuto,
+    shift: shift ? { id: shift.id, name: shift.name, start: shift.start_time, end: shift.end_time } : null,
+    shift_source: ctx.shiftSource ?? "none",
+    late_min: lateMin, early_min: earlyMin, late_deduct: round2(lateDeduct),
     ot_min: otMin, ot_auto_min: otAuto, ot_rate: round2(otRate),
-    base: round2(base), ot_pay: round2(otPay), open: shifts.some((s) => !s.check_out && !s.forgot_out),
+    base: round2(base), ot_pay: round2(otPay), open: punches.some((s) => !s.check_out && !s.forgot_out),
   };
+}
+
+// Shifts, roster and breaks a set of days needs.
+async function loadShiftContext(branchId: string, staffIds: number[], from: string, to: string, punchIds: number[]) {
+  const [{ data: shifts }, { data: roster }, { data: breaks }] = await Promise.all([
+    supabase.from("shifts").select("*").eq("branch_id", branchId).order("sort").order("start_time"),
+    staffIds.length ? supabase.from("shift_roster").select("*").in("staff_id", staffIds).gte("date", from).lte("date", to) : Promise.resolve({ data: [] }),
+    punchIds.length ? supabase.from("breaks").select("*").in("punch_id", punchIds).order("start_at") : Promise.resolve({ data: [] }),
+  ]);
+  const rosterMap = new Map<string, number | null>();
+  for (const r of (roster ?? []) as Array<{ staff_id: number; date: string; shift_id: number | null }>) rosterMap.set(`${r.staff_id}|${r.date}`, r.shift_id);
+  return { shifts: (shifts ?? []) as Shift[], rosterMap, breaks: (breaks ?? []) as BreakRow[] };
+}
+
+// One day for one person, with the shift worked out.
+function computeStaffDay(rules: Pay, staffId: number, date: string, punches: PunchRow[], sc: Awaited<ReturnType<typeof loadShiftContext>>) {
+  const firstIn = punches.length ? Math.min(...punches.map((p) => Date.parse(p.check_in))) : null;
+  const override = punches.find((p) => p.shift_override !== null && p.shift_override !== undefined)?.shift_override;
+  const key = `${staffId}|${date}`;
+  const { shift, source } = resolveShift(rules, sc.shifts, sc.rosterMap.has(key) ? sc.rosterMap.get(key) : undefined, date, firstIn, override);
+  return computeDay(rules, punches, date, { shift, shiftSource: source, breaks: sc.breaks });
 }
 
 // ============================================================
@@ -1096,9 +1364,13 @@ function computeDay(rules: Pay, shifts: PunchRow[], date: string) {
 const LONG_SHIFT_HOURS = 14;
 const SHORT_SHIFT_MIN = 5;
 
-function flagsOf(r: PunchRow): string[] {
+function flagsOf(r: PunchRow, breaks: BreakRow[] = [], breakFlagMin = PAY_DEFAULTS.break_flag_min): string[] {
   if (r.review_ok) return [];
   const f: string[] = [];
+  const mine = breaks.filter((b) => b.punch_id === r.id);
+  if (mine.some((b) => b.auto_closed)) f.push("break_not_ended");
+  const longest = Math.max(0, ...mine.filter((b) => b.end_at).map((b) => (Date.parse(b.end_at as string) - Date.parse(b.start_at)) / 60000));
+  if (longest > breakFlagMin) f.push("break_long");
   if (r.forgot_out) f.push("forgot_out");
   else if (!r.check_out && Date.now() - Date.parse(r.check_in) > FORGOT_OUT_HOURS * 3600000) f.push("still_open");
   if (r.check_out) {
@@ -1151,11 +1423,12 @@ async function staffPeriodSummary(b: BranchFull, s: StaffFull, date?: string) {
     list.push(p);
     byDate.set(p.work_date, list);
   }
-  const days = [...byDate.entries()].sort().map(([dt, list]) => computeDay(rules, list, dt));
+  const sc = await loadShiftContext(b.id, [s.id], per.start, per.end, ((punches ?? []) as PunchRow[]).map((p) => p.id));
+  const days = [...byDate.entries()].sort().map(([dt, list]) => computeStaffDay(rules, s.id, dt, list, sc));
   const approved = (adv ?? []).filter((a) => a.status === "approved");
   const pending = (adv ?? []).filter((a) => a.status === "pending");
   const sum = (arr: Array<Record<string, unknown>>, k: string) => round2(arr.reduce((m, x) => m + Number(x[k] || 0), 0));
-  const base = sum(days, "base"), otPay = sum(days, "ot_pay"), advTotal = sum(approved, "amount");
+  const base = sum(days, "base"), otPay = sum(days, "ot_pay"), advTotal = sum(approved, "amount"), lateDeduct = sum(days, "late_deduct");
   const today = localDate(new Date());
   const lastCounted = per.end < today ? per.end : today;
   const calendarDays = lastCounted >= per.start ? dayNum(lastCounted) - dayNum(per.start) + 1 : 0;
@@ -1169,8 +1442,13 @@ async function staffPeriodSummary(b: BranchFull, s: StaffFull, date?: string) {
       days_off: Math.max(0, calendarDays - days.filter((x) => x.worked_min > 0).length),
       worked_hours: round2(days.reduce((m, x) => m + x.worked_min, 0) / 60),
       ot_hours: round2(days.reduce((m, x) => m + x.ot_min, 0) / 60),
-      base, ot_pay: otPay, gross: round2(base + otPay),
-      advances: advTotal, pending: sum(pending, "amount"), net: round2(base + otPay - advTotal),
+      break_hours: round2(days.reduce((m, x) => m + x.break_min, 0) / 60),
+      late_times: days.filter((x) => x.late_min > 0).length,
+      late_min: days.reduce((m, x) => m + x.late_min, 0),
+      early_min: days.reduce((m, x) => m + x.early_min, 0),
+      late_deduct: lateDeduct,
+      base, ot_pay: otPay, gross: round2(base + otPay - lateDeduct),
+      advances: advTotal, pending: sum(pending, "amount"), net: round2(base + otPay - lateDeduct - advTotal),
     },
     days,
     advances: (adv ?? []).filter((a) => a.status !== "rejected"),
@@ -1260,6 +1538,7 @@ async function handlePaySettings(p: Record<string, unknown>) {
   return json({
     ok: true,
     system_defaults: PAY_DEFAULTS,
+    shifts: ((await supabase.from("shifts").select("*").eq("branch_id", b.id).eq("active", true).order("sort").order("start_time")).data ?? []),
     branch: { id: b.id, pay_defaults: b.pay_defaults ?? {}, staff_advance: b.staff_advance, advance_auto_max: Number(b.advance_auto_max) },
     branch_period: { hist: b.period ?? [], ...show(b.period ?? []) },
     staff: (staff ?? []).map((s) => ({
@@ -1293,7 +1572,9 @@ async function handleReviewList(p: Record<string, unknown>) {
   const since = addDays(localDate(new Date()), -62);
   const { data } = await supabase.from("punches").select("*")
     .eq("branch_id", branchId).gte("work_date", since).eq("review_ok", false).order("check_in");
-  const items = ((data ?? []) as PunchRow[]).map((r) => ({ ...withLocal(r), flags: flagsOf(r) })).filter((r) => r.flags.length);
+  const rows = (data ?? []) as PunchRow[];
+  const { data: brs } = rows.length ? await supabase.from("breaks").select("*").in("punch_id", rows.map((r) => r.id)) : { data: [] };
+  const items = rows.map((r) => ({ ...withLocal(r), flags: flagsOf(r, (brs ?? []) as BreakRow[]) })).filter((r) => r.flags.length);
   const { data: pend } = await supabase.from("advances").select("id").eq("branch_id", branchId).eq("status", "pending");
   return json({ ok: true, items, pending_advances: (pend ?? []).length });
 }
@@ -1320,6 +1601,16 @@ function readOverrides(p: Record<string, unknown>): Record<string, unknown> | st
     const v = p.day_override === "" || p.day_override === null ? null : Number(p.day_override);
     if (v !== null && ![0, 0.5, 1].includes(v)) return "bad_day";
     out.day_override = v;
+  }
+  if (p.shift_override !== undefined) {
+    const v = p.shift_override === "" || p.shift_override === null ? null : Math.round(Number(p.shift_override));
+    if (v !== null && (!Number.isFinite(v) || (v !== -1 && v <= 0))) return "bad_shift";
+    out.shift_override = v;
+  }
+  if (p.break_override_min !== undefined) {
+    const v = p.break_override_min === "" || p.break_override_min === null ? null : Math.round(Number(p.break_override_min));
+    if (v !== null && (!Number.isFinite(v) || v < 0 || v > 1440)) return "bad_break";
+    out.break_override_min = v;
   }
   if (p.ot_override_min !== undefined) {
     const v = p.ot_override_min === "" || p.ot_override_min === null ? null : Math.round(Number(p.ot_override_min));
@@ -1465,6 +1756,128 @@ async function handleListAdvances(p: Record<string, unknown>) {
 }
 
 // ============================================================
+// Shifts (กะ) and the weekly roster (ตารางกะ)
+// ============================================================
+
+async function handleListShifts(p: Record<string, unknown>) {
+  { const g = await adminGate(p); if (g) return g; }
+  const { data, error } = await supabase.from("shifts").select("*")
+    .eq("branch_id", String(p.branch_id ?? "")).eq("active", true).order("sort").order("start_time");
+  if (error) return json({ ok: false, error: error.message });
+  return json({ ok: true, shifts: data ?? [] });
+}
+
+// Add (no id) or edit a shift. break_mode "" = use the person's / branch's break rule.
+async function handleSaveShift(p: Record<string, unknown>) {
+  { const g = await adminGate(p); if (g) return g; }
+  const name = String(p.name ?? "").trim().slice(0, 40);
+  const start = cleanTime(p.start_time), end = cleanTime(p.end_time);
+  if (!name) return json({ ok: false, error: "missing_name" });
+  if (!start || !end || start === end) return json({ ok: false, error: "bad_shift_time" });
+  const bm = String(p.break_mode ?? "");
+  if (bm && !["auto", "punch", "paid"].includes(bm)) return json({ ok: false, error: "bad_break" });
+  const num = (v: unknown, max: number) => {
+    if (v === "" || v === null || v === undefined) return null;
+    const n = Number(v);
+    return Number.isFinite(n) && n >= 0 && n <= max ? n : NaN;
+  };
+  const bMin = num(p.break_min, 600), bAfter = num(p.break_after_hours, 24);
+  if (Number.isNaN(bMin) || Number.isNaN(bAfter)) return json({ ok: false, error: "bad_break" });
+  const row: Record<string, unknown> = {
+    name, start_time: start, end_time: end, break_mode: bm || null, break_min: bMin, break_after_hours: bAfter,
+    color: /^#[0-9a-fA-F]{6}$/.test(String(p.color ?? "")) ? String(p.color) : "#6366f1",
+  };
+  const id = Number(p.id) || 0;
+  let res;
+  if (id) res = await supabase.from("shifts").update(row).eq("id", id).select("id").maybeSingle();
+  else {
+    const branchId = String(p.branch_id ?? "");
+    const { data: all } = await supabase.from("shifts").select("sort").eq("branch_id", branchId);
+    res = await supabase.from("shifts").insert({ ...row, branch_id: branchId, sort: Math.max(-1, ...(all ?? []).map((x) => x.sort ?? 0)) + 1 }).select("id").maybeSingle();
+  }
+  if (res.error) return json({ ok: false, error: res.error.message });
+  await logAdmin("save_shift", { id: id || res.data?.id, ...row });
+  return json({ ok: true, id: id || res.data?.id });
+}
+
+// Hides a shift (days already worked keep using it).
+async function handleDeleteShift(p: Record<string, unknown>) {
+  { const g = await adminGate(p); if (g) return g; }
+  const { error } = await supabase.from("shifts").update({ active: false }).eq("id", Number(p.id) || 0);
+  if (error) return json({ ok: false, error: error.message });
+  await logAdmin("delete_shift", { id: p.id });
+  return json({ ok: true });
+}
+
+// Roster grid for a date range: what each person works each day, and where it comes from
+// (roster / weekday pattern / usual shift), so the admin sees the real plan, not just overrides.
+async function handleGetRoster(p: Record<string, unknown>) {
+  { const g = await adminGate(p); if (g) return g; }
+  const branchId = String(p.branch_id ?? "");
+  const from = String(p.from ?? ""), to = String(p.to ?? "");
+  if (!isIsoDate(from) || !isIsoDate(to) || to < from || dayNum(to) - dayNum(from) > 41) return json({ ok: false, error: "bad_date" });
+  const b = await loadBranch(branchId);
+  if (!b) return json({ ok: false, error: "unknown_branch" });
+  const { data: staff } = await supabase.from("staff").select("id, name, label, pay").eq("branch_id", branchId).eq("active", true).order("sort").order("name");
+  const people = (staff ?? []) as Array<{ id: number; name: string; label: string; pay: Record<string, unknown> }>;
+  const sc = await loadShiftContext(branchId, people.map((x) => x.id), from, to, []);
+  const cells: Record<string, unknown> = {};
+  for (const person of people) {
+    const rules = effectivePay(b.pay_defaults, person.pay);
+    for (let d = from; d <= to; d = addDays(d, 1)) {
+      const k = `${person.id}|${d}`;
+      const r = resolveShift(rules, sc.shifts, sc.rosterMap.has(k) ? sc.rosterMap.get(k) : undefined, d, null, undefined);
+      cells[k] = { shift_id: r.shift?.id ?? null, source: r.source, set: sc.rosterMap.has(k) };
+    }
+  }
+  return json({
+    ok: true,
+    staff: people.map((x) => ({ id: x.id, label: x.label || x.name, work_mode: effectivePay(b.pay_defaults, x.pay).work_mode })),
+    shifts: sc.shifts.filter((x) => x.active), cells,
+  });
+}
+
+// Set roster cells. entries: [{ staff_id, date, shift: <id> | "off" | "clear" }]
+// "clear" removes the roster entry so the weekday/usual shift applies again.
+async function handleSetRoster(p: Record<string, unknown>) {
+  { const g = await adminGate(p); if (g) return g; }
+  const branchId = String(p.branch_id ?? "");
+  const list = Array.isArray(p.entries) ? p.entries as Array<Record<string, unknown>> : [];
+  if (list.length > 500) return json({ ok: false, error: "too_many" });
+  const { data: staff } = await supabase.from("staff").select("id").eq("branch_id", branchId);
+  const mine = new Set((staff ?? []).map((x) => x.id));
+  for (const e of list) {
+    const staffId = Number(e.staff_id), date = String(e.date ?? ""), v = String(e.shift ?? "");
+    if (!mine.has(staffId) || !isIsoDate(date)) return json({ ok: false, error: "bad_entry" });
+    if (await isLocked(staffId, date)) return json({ ok: false, error: "locked" });
+    if (v === "clear") await supabase.from("shift_roster").delete().eq("staff_id", staffId).eq("date", date);
+    else {
+      const shiftId = v === "off" ? null : Number(v);
+      if (shiftId !== null && !(shiftId > 0)) return json({ ok: false, error: "bad_entry" });
+      await supabase.from("shift_roster").upsert({ staff_id: staffId, date, shift_id: shiftId, branch_id: branchId });
+    }
+  }
+  await logAdmin("set_roster", { branch_id: branchId, count: list.length });
+  return json({ ok: true });
+}
+
+// A person's planned shifts for the next 7 days (staff page, after the PIN).
+async function myShifts(b: BranchFull, s: StaffFull) {
+  const rules = effectivePay(b.pay_defaults, s.pay);
+  if (rules.work_mode !== "shift") return null;
+  const today = localDate(new Date());
+  const to = addDays(today, 6);
+  const sc = await loadShiftContext(b.id, [s.id], today, to, []);
+  const out = [];
+  for (let d = today; d <= to; d = addDays(d, 1)) {
+    const k = `${s.id}|${d}`;
+    const r = resolveShift(rules, sc.shifts, sc.rosterMap.has(k) ? sc.rosterMap.get(k) : undefined, d, null, undefined);
+    out.push({ date: d, shift: r.shift ? { name: r.shift.name, start: r.shift.start_time, end: r.shift.end_time, color: r.shift.color } : null, off: r.source.endsWith("_off") });
+  }
+  return out;
+}
+
+// ============================================================
 // Staff self-service (with the person's own PIN)
 // ============================================================
 
@@ -1487,10 +1900,14 @@ async function staffByPin(p: Record<string, unknown>): Promise<{ s: StaffFull; b
 async function handleMySummary(p: Record<string, unknown>) {
   const who = await staffByPin(p);
   if (typeof who === "string") return json({ ok: false, error: who });
-  const [sum, duties] = await Promise.all([staffPeriodSummary(who.b, who.s), myDuties(who.b.id, who.s.name, cleanLang(p.lang))]);
+  const [sum, duties, shifts] = await Promise.all([
+    staffPeriodSummary(who.b, who.s), myDuties(who.b.id, who.s.name, cleanLang(p.lang)), myShifts(who.b, who.s),
+  ]);
   return json({
     ok: true,
     my_duties: duties,
+    my_shifts: shifts,
+    late_times: sum.totals.late_times,
     staff_advance: who.b.staff_advance,
     period: { start: sum.period.start, end: sum.period.end },
     days_worked: sum.totals.days_worked,
@@ -1542,6 +1959,11 @@ const ACTIONS: Record<string, (p: Record<string, unknown>) => Promise<Response>>
   save_staff_pay: handleSaveStaffPay,
   save_period: handleSavePeriod,
   pay_summary: handlePaySummary,
+  list_shifts: handleListShifts,
+  save_shift: handleSaveShift,
+  delete_shift: handleDeleteShift,
+  get_roster: handleGetRoster,
+  set_roster: handleSetRoster,
   review_list: handleReviewList,
   edit_punch: handleEditPunch,
   add_punch: handleAddPunch,
