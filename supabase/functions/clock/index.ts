@@ -1,6 +1,6 @@
 // Edge Function "clock" — ระบบตอกบัตร (ใช้ Supabase project เดียวกับปฏิทินได้ หรือใช้เดี่ยวๆ ก็ได้)
 //
-// Database: run supabase/migrations/0001_clock.sql, 0002_gps_photo.sql, 0003_pay.sql in order.
+// Database: run supabase/migrations/0001_clock.sql, 0002_gps_photo.sql, 0003_pay.sql, 0004_security.sql in order.
 // Deploy: Supabase Dashboard -> Edge Functions -> create function named "clock" ->
 // paste this file's contents -> Deploy -> แท็บ Settings -> ปิด "Verify JWT with legacy secret"
 //
@@ -70,6 +70,80 @@ const ADMIN_PIN_KEY = "admin_pin_hash";
 async function checkAdminPin(pin: string): Promise<boolean> {
   if (!pin) return false;
   return checkPassword(await getSetting<string | null>(ADMIN_PIN_KEY, null), pin);
+}
+
+// ---------- Wrong-PIN lockout ----------
+// 5 wrong tries in a row locks that key: the admin PIN for 30 minutes, a person's PIN (or a
+// branch PIN) for 15. Even the right PIN is refused while locked, so guessing is pointless.
+const LOCK_MAX_TRIES = 5;
+const LOCK_MINUTES_ADMIN = 30;
+const LOCK_MINUTES_OTHER = 15;
+
+async function attempt(key: string, check: () => Promise<boolean>): Promise<"ok" | "wrong" | { locked: number }> {
+  const { data: row } = await supabase.from("pin_attempts").select("*").eq("key", key).maybeSingle();
+  const now = Date.now();
+  if (row?.locked_until && Date.parse(row.locked_until) > now) {
+    return { locked: Math.ceil((Date.parse(row.locked_until) - now) / 60000) };
+  }
+  if (await check()) {
+    if (row && (row.fails || row.locked_until)) {
+      await supabase.from("pin_attempts").update({ fails: 0, locked_until: null, updated_at: new Date().toISOString() }).eq("key", key);
+    }
+    return "ok";
+  }
+  const fails = (row?.fails ?? 0) + 1;
+  const minutes = key === "admin" ? LOCK_MINUTES_ADMIN : LOCK_MINUTES_OTHER;
+  const lock = fails >= LOCK_MAX_TRIES;
+  await supabase.from("pin_attempts").upsert({
+    key, fails: lock ? 0 : fails, updated_at: new Date().toISOString(),
+    locked_until: lock ? new Date(now + minutes * 60000).toISOString() : null,
+  });
+  if (lock) {
+    await logAdmin("pin_lockout", { key, minutes });
+    return { locked: minutes };
+  }
+  return "wrong";
+}
+
+// For admin actions: null = allowed, otherwise the error response to send back.
+async function adminGate(p: Record<string, unknown>): Promise<Response | null> {
+  const pin = String(p.admin_pin ?? "");
+  if (!pin) return json({ ok: false, error: "wrong_admin_pin" });
+  const r = await attempt("admin", () => checkAdminPin(pin));
+  if (r === "ok") return null;
+  if (r === "wrong") return json({ ok: false, error: "wrong_admin_pin" });
+  return json({ ok: false, error: "too_many_tries", minutes: r.locked });
+}
+
+// A person's own PIN. null = correct, otherwise an error code.
+async function staffPinError(person: { id: number; pin_hash: string | null }, pin: string): Promise<string | null> {
+  if (!person.pin_hash) return "no_pin";
+  const r = await attempt(`staff:${person.id}`, () => checkPassword(person.pin_hash, pin));
+  if (r === "ok") return null;
+  return r === "wrong" ? "wrong_pin" : "too_many_tries";
+}
+
+// ---------- Branch links ----------
+// Staff pages carry the branch's secret key (?b=...). Without it nothing about a branch is visible,
+// so people in one branch can't look at another. The admin can change the key to cut off an old link.
+
+function newAccessKey(): string {
+  return [...crypto.getRandomValues(new Uint8Array(8))].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+async function branchFromKey(p: Record<string, unknown>): Promise<{ id: string } | null> {
+  const key = String(p.key ?? "").trim();
+  if (!/^[a-f0-9]{8,64}$/i.test(key)) return null;
+  const { data } = await supabase.from("branches").select("id").eq("access_key", key.toLowerCase()).maybeSingle();
+  return data ?? null;
+}
+
+// Gives every branch a key (branches made before keys existed, or by the calendar app).
+async function ensureAccessKeys() {
+  const { data } = await supabase.from("branches").select("id, access_key");
+  for (const b of data ?? []) {
+    if (!b.access_key) await supabase.from("branches").update({ access_key: newAccessKey() }).eq("id", b.id);
+  }
 }
 
 function isIsoDate(s: string): boolean {
@@ -171,7 +245,7 @@ ${JSON.stringify(chunk)}`;
 // Admin: AI suggestions only, nothing saved. The page shows them in editable boxes first.
 // texts: { key: thai }
 async function handleAiTranslate(p: Record<string, unknown>) {
-  if (!(await checkAdminPin(String(p.admin_pin ?? "")))) return json({ ok: false, error: "wrong_admin_pin" });
+  { const g = await adminGate(p); if (g) return g; }
   const texts = (p.texts && typeof p.texts === "object") ? p.texts as Record<string, unknown> : {};
   const clean = Object.fromEntries(Object.entries(texts).map(([k, v]) => [k, String(v ?? "")]));
   if (Object.keys(clean).length > 200) return json({ ok: false, error: "too_many_texts" });
@@ -184,7 +258,7 @@ async function handleAiTranslate(p: Record<string, unknown>) {
 
 // Admin: list rows to review/edit (e.g. prefix "ui.cal.").
 async function handleListTranslations(p: Record<string, unknown>) {
-  if (!(await checkAdminPin(String(p.admin_pin ?? "")))) return json({ ok: false, error: "wrong_admin_pin" });
+  { const g = await adminGate(p); if (g) return g; }
   try {
     const rows = await getTranslations(undefined, String(p.prefix ?? ""));
     rows.sort((a, b) => a.key.localeCompare(b.key));
@@ -217,7 +291,7 @@ async function saveTranslationRows(rows: Array<Record<string, unknown>>) {
 }
 
 async function handleSaveTranslations(p: Record<string, unknown>) {
-  if (!(await checkAdminPin(String(p.admin_pin ?? "")))) return json({ ok: false, error: "wrong_admin_pin" });
+  { const g = await adminGate(p); if (g) return g; }
   try {
     const rows = Array.isArray(p.rows) ? p.rows as Array<Record<string, unknown>> : [];
     await saveTranslationRows(rows);
@@ -232,7 +306,7 @@ async function handleSaveTranslations(p: Record<string, unknown>) {
 // with AI — skipping languages edited by hand, and (unless `all`) ones that already have text.
 // texts: { key: thai } as written in the page source. include_topics: also every topic text.
 async function handleTranslatePage(p: Record<string, unknown>) {
-  if (!(await checkAdminPin(String(p.admin_pin ?? "")))) return json({ ok: false, error: "wrong_admin_pin" });
+  { const g = await adminGate(p); if (g) return g; }
   const texts: Record<string, unknown> = { ...((p.texts && typeof p.texts === "object") ? p.texts as Record<string, unknown> : {}) };
   const all = !!p.all;
   try {
@@ -311,11 +385,30 @@ function staffView(s: Record<string, unknown>) {
 }
 
 // Public, one request when the page opens: branches + staff + page texts in `lang`.
+// Staff page: send `key` (the branch link) and get only that branch.
+// Admin page: send `admin_pin` and get every branch, with their link keys.
+// Neither: just whether the shop has been set up (has_admin) and the page texts.
 async function handleBootstrap(p: Record<string, unknown>) {
   const lang = cleanLang(p.lang);
+  let only: string | null = null;
+  let admin = false;
+  if (p.admin_pin) {
+    const g = await adminGate(p);
+    if (g) return g;
+    admin = true;
+    await ensureAccessKeys();
+  } else {
+    const b = await branchFromKey(p);
+    only = b?.id ?? null;
+  }
+  const cols = "id, name, sort, lat, lng, radius_m, require_gps, require_photo" + (admin ? ", access_key, photo_keep_days" : "");
+  let bq = supabase.from("branches").select(cols);
+  let sq = supabase.from("staff").select("id, branch_id, name, label, short, sort").eq("active", true);
+  // no valid link: ask for a branch id that can never exist (ids are cleaned to a-z0-9_-)
+  if (!admin) { bq = bq.eq("id", only ?? "-"); sq = sq.eq("branch_id", only ?? "-"); }
   const [{ data: branches, error }, { data: staff }] = await Promise.all([
-    supabase.from("branches").select("id, name, sort, lat, lng, radius_m, require_gps, require_photo").order("sort").order("name"),
-    supabase.from("staff").select("id, branch_id, name, label, short, sort").eq("active", true).order("sort").order("name"),
+    bq.order("sort").order("name"),
+    sq.order("sort").order("name"),
   ]);
   if (error) return json({ ok: false, error: error.message });
   let dict: Record<string, string> = {};
@@ -329,8 +422,10 @@ async function handleBootstrap(p: Record<string, unknown>) {
     lang,
     tz: shopTz(),
     has_admin: await hasAdmin(),
-    branches: (branches ?? []).map((b) => ({
+    bad_link: !admin && !!p.key && !only,
+    branches: (branches ?? []).map((b: Record<string, unknown>) => ({
       ...b,
+      ...(admin ? {} : { access_key: undefined, photo_keep_days: undefined }), // keys only go to the admin
       staff: (staff ?? []).filter((s) => s.branch_id === b.id).map(staffView),
     })),
     dict,
@@ -346,7 +441,7 @@ async function handleSetup(p: Record<string, unknown>) {
   const id = cleanId(String(p.branch_id ?? "") || "main") || "main";
   if (pin.length < 4) return json({ ok: false, error: "pin_too_short" });
   if (!name) return json({ ok: false, error: "missing_name" });
-  const { error } = await supabase.from("branches").upsert({ id, name });
+  const { error } = await supabase.from("branches").upsert({ id, name, access_key: newAccessKey() });
   if (error) return json({ ok: false, error: error.message });
   await setSetting(ADMIN_PIN_KEY, await hashPassword(pin));
   await logAdmin("clock_setup", { branch: id });
@@ -354,11 +449,11 @@ async function handleSetup(p: Record<string, unknown>) {
 }
 
 async function handleCheckAdminPin(p: Record<string, unknown>) {
-  return json({ ok: await checkAdminPin(String(p.admin_pin ?? "")) });
+  return (await adminGate(p)) ?? json({ ok: true });
 }
 
 async function handleChangeAdminPin(p: Record<string, unknown>) {
-  if (!(await checkAdminPin(String(p.admin_pin ?? "")))) return json({ ok: false, error: "wrong_admin_pin" });
+  { const g = await adminGate(p); if (g) return g; }
   const next = String(p.new_pin ?? "").trim();
   if (next.length < 4) return json({ ok: false, error: "pin_too_short" });
   await setSetting(ADMIN_PIN_KEY, await hashPassword(next));
@@ -368,20 +463,43 @@ async function handleChangeAdminPin(p: Record<string, unknown>) {
 
 // Central admin. Create or rename a branch.
 async function handleSaveBranch(p: Record<string, unknown>) {
-  if (!(await checkAdminPin(String(p.admin_pin ?? "")))) return json({ ok: false, error: "wrong_admin_pin" });
+  { const g = await adminGate(p); if (g) return g; }
   const name = String(p.name ?? "").trim();
   const id = cleanId(String(p.id ?? "") || name);
   if (!name) return json({ ok: false, error: "missing_name" });
   if (!id) return json({ ok: false, error: "bad_branch_id" });
-  const { error } = await supabase.from("branches").upsert({ id, name });
+  const { data: existing } = await supabase.from("branches").select("id, access_key").eq("id", id).maybeSingle();
+  const row: Record<string, unknown> = { id, name };
+  if (!existing?.access_key) row.access_key = newAccessKey();
+  const { error } = await supabase.from("branches").upsert(row);
   if (error) return json({ ok: false, error: error.message });
   await logAdmin("save_branch", { id, name });
   return json({ ok: true, id });
 }
 
+// Central admin. New secret link for a branch; the old link stops working at once.
+async function handleRotateBranchKey(p: Record<string, unknown>) {
+  { const g = await adminGate(p); if (g) return g; }
+  const id = String(p.branch_id ?? "");
+  const key = newAccessKey();
+  const { error } = await supabase.from("branches").update({ access_key: key }).eq("id", id);
+  if (error) return json({ ok: false, error: error.message });
+  await logAdmin("rotate_branch_key", { id });
+  return json({ ok: true, access_key: key });
+}
+
+// Central admin. Recent lockouts (someone kept typing wrong PINs).
+async function handleSecurityEvents(p: Record<string, unknown>) {
+  { const g = await adminGate(p); if (g) return g; }
+  const since = new Date(Date.now() - 14 * 86400000).toISOString();
+  const { data } = await supabase.from("admin_log").select("created_at, details")
+    .eq("action", "pin_lockout").gte("created_at", since).order("created_at");
+  return json({ ok: true, events: data ?? [] });
+}
+
 // Central admin. Everyone in a branch, including people switched off, and whether they have a PIN.
 async function handleListStaffAdmin(p: Record<string, unknown>) {
-  if (!(await checkAdminPin(String(p.admin_pin ?? "")))) return json({ ok: false, error: "wrong_admin_pin" });
+  { const g = await adminGate(p); if (g) return g; }
   const { data, error } = await supabase.from("staff")
     .select("id, branch_id, name, label, short, active, sort, pin_hash")
     .eq("branch_id", String(p.branch_id ?? "")).order("sort").order("name");
@@ -396,7 +514,7 @@ async function handleListStaffAdmin(p: Record<string, unknown>) {
 
 // Central admin. Add (no id) or update one person. pin: "" = keep, "-" = remove, else 4-6 digits.
 async function handleSaveStaffMember(p: Record<string, unknown>) {
-  if (!(await checkAdminPin(String(p.admin_pin ?? "")))) return json({ ok: false, error: "wrong_admin_pin" });
+  { const g = await adminGate(p); if (g) return g; }
   const name = String(p.name ?? "").trim();
   const branchId = String(p.branch_id ?? "");
   if (!name) return json({ ok: false, error: "missing_name" });
@@ -427,6 +545,8 @@ async function handleSaveStaffMember(p: Record<string, unknown>) {
     const dup = String(res.error.message).includes("duplicate") || res.error.code === "23505";
     return json({ ok: false, error: dup ? "duplicate_name" : res.error.message });
   }
+  // New PIN set by the admin: clear any lockout from forgotten-PIN guesses
+  if (pin && (id || res.data?.id)) await supabase.from("pin_attempts").delete().eq("key", `staff:${id || res.data?.id}`);
   await logAdmin("save_staff_member", { id: id || res.data?.id, name, pin_changed: !!pin });
   return json({ ok: true, id: id || res.data?.id });
 }
@@ -508,9 +628,11 @@ async function myDuties(branchId: string, staffName: string, lang: Lang) {
 
 // Public, read-only: a whole month of the calendar for the staff page.
 async function handleScheduleMonth(p: Record<string, unknown>) {
-  const branchId = String(p.branch ?? "");
+  const b = await branchFromKey(p);
+  if (!b) return json({ ok: false, error: "bad_link" });
+  const branchId = b.id;
   const month = String(p.month ?? "");
-  if (!branchId || !/^\d{4}-\d{2}$/.test(month)) return json({ ok: false, error: "bad_month" });
+  if (!/^\d{4}-\d{2}$/.test(month)) return json({ ok: false, error: "bad_month" });
   const [y, m] = month.split("-").map(Number);
   const last = `${month}-${String(daysInMonth(y, m)).padStart(2, "0")}`;
   const days = await calendarRange(branchId, `${month}-01`, last, cleanLang(p.lang));
@@ -519,8 +641,9 @@ async function handleScheduleMonth(p: Record<string, unknown>) {
 
 // Public: today's list and today's calendar messages for the branch.
 async function handleToday(p: Record<string, unknown>) {
-  const branchId = String(p.branch ?? "");
-  if (!branchId) return json({ ok: false, error: "missing_branch" });
+  const b = await branchFromKey(p);
+  if (!b) return json({ ok: false, error: "bad_link" });
+  const branchId = b.id;
   const lang = cleanLang(p.lang);
   const [punches, messages, week] = await Promise.all([
     todayPunches(branchId),
@@ -584,7 +707,9 @@ async function savePhoto(branchId: string, staffId: number, type: string, photo:
 // Public with the person's own PIN. type: "in" | "out"
 // Optional: lat, lng, accuracy (metres) and photo (data URL), required when the branch asks for them.
 async function handlePunch(p: Record<string, unknown>) {
-  const branchId = String(p.branch ?? "");
+  const kb = await branchFromKey(p);
+  if (!kb) return json({ ok: false, error: "bad_link" });
+  const branchId = kb.id;
   const staffId = Number(p.staff_id) || 0;
   const type = p.type === "out" ? "out" : "in";
   const pin = String(p.pin ?? "").trim();
@@ -594,8 +719,8 @@ async function handlePunch(p: Record<string, unknown>) {
   const { data: person } = await supabase.from("staff")
     .select("id, branch_id, name, active, pin_hash").eq("id", staffId).maybeSingle();
   if (!person || !person.active || person.branch_id !== branchId) return json({ ok: false, error: "unknown_staff" });
-  if (!person.pin_hash) return json({ ok: false, error: "no_pin" });
-  if (!(await checkPassword(person.pin_hash, pin))) return json({ ok: false, error: "wrong_pin" });
+  const pinErr = await staffPinError(person, pin);
+  if (pinErr) return json({ ok: false, error: pinErr });
 
   const { data: branch } = await supabase.from("branches")
     .select("id, lat, lng, radius_m, require_gps, require_photo").eq("id", branchId).maybeSingle();
@@ -668,7 +793,7 @@ async function handlePunch(p: Record<string, unknown>) {
 
 // Central admin. Shifts of a branch between two dates (inclusive), for the admin page.
 async function handlePunchesRange(p: Record<string, unknown>) {
-  if (!(await checkAdminPin(String(p.admin_pin ?? "")))) return json({ ok: false, error: "wrong_admin_pin" });
+  { const g = await adminGate(p); if (g) return g; }
   const branchId = String(p.branch_id ?? "");
   const from = String(p.from ?? "");
   const to = String(p.to ?? from);
@@ -722,7 +847,7 @@ async function cleanupOldPhotos() {
 
 // Central admin. Location, radius and photo rules of a branch.
 async function handleSaveBranchSettings(p: Record<string, unknown>) {
-  if (!(await checkAdminPin(String(p.admin_pin ?? "")))) return json({ ok: false, error: "wrong_admin_pin" });
+  { const g = await adminGate(p); if (g) return g; }
   const id = String(p.id ?? "");
   const num = (v: unknown) => (v === "" || v === null || v === undefined) ? null : Number(v);
   const lat = num(p.lat), lng = num(p.lng);
@@ -1057,7 +1182,7 @@ async function staffPeriodSummary(b: BranchFull, s: StaffFull, date?: string) {
 // ============================================================
 
 async function handleSavePayDefaults(p: Record<string, unknown>) {
-  if (!(await checkAdminPin(String(p.admin_pin ?? "")))) return json({ ok: false, error: "wrong_admin_pin" });
+  { const g = await adminGate(p); if (g) return g; }
   const { pay, bad } = cleanPay((p.pay ?? {}) as Record<string, unknown>);
   if (bad.length) return json({ ok: false, error: "bad_pay", fields: bad });
   const row: Record<string, unknown> = { pay_defaults: pay };
@@ -1074,7 +1199,7 @@ async function handleSavePayDefaults(p: Record<string, unknown>) {
 }
 
 async function handleSaveStaffPay(p: Record<string, unknown>) {
-  if (!(await checkAdminPin(String(p.admin_pin ?? "")))) return json({ ok: false, error: "wrong_admin_pin" });
+  { const g = await adminGate(p); if (g) return g; }
   const { pay, bad } = cleanPay((p.pay ?? {}) as Record<string, unknown>);
   if (bad.length) return json({ ok: false, error: "bad_pay", fields: bad });
   const { error } = await supabase.from("staff").update({ pay }).eq("id", Number(p.staff_id) || 0);
@@ -1093,7 +1218,7 @@ async function newPeriodHist(current: PeriodHist, cfg: PeriodCfg, billed: boolea
 }
 
 async function handleSavePeriod(p: Record<string, unknown>) {
-  if (!(await checkAdminPin(String(p.admin_pin ?? "")))) return json({ ok: false, error: "wrong_admin_pin" });
+  { const g = await adminGate(p); if (g) return g; }
   const staffId = Number(p.staff_id) || 0;
   const useBranch = staffId && p.cfg === null;
   const cfg = useBranch ? null : cleanPeriodCfg((p.cfg ?? {}) as Record<string, unknown>);
@@ -1121,7 +1246,7 @@ async function handleSavePeriod(p: Record<string, unknown>) {
 
 // Everything the admin "pay" screens need for a branch: defaults, period now/next, each person's settings.
 async function handlePaySettings(p: Record<string, unknown>) {
-  if (!(await checkAdminPin(String(p.admin_pin ?? "")))) return json({ ok: false, error: "wrong_admin_pin" });
+  { const g = await adminGate(p); if (g) return g; }
   const b = await loadBranch(String(p.branch_id ?? ""));
   if (!b) return json({ ok: false, error: "unknown_branch" });
   const { data: staff } = await supabase.from("staff").select("id, name, label, active, pay, period")
@@ -1147,7 +1272,7 @@ async function handlePaySettings(p: Record<string, unknown>) {
 
 // Live totals of the current (or `date`) period for everyone active in a branch.
 async function handlePaySummary(p: Record<string, unknown>) {
-  if (!(await checkAdminPin(String(p.admin_pin ?? "")))) return json({ ok: false, error: "wrong_admin_pin" });
+  { const g = await adminGate(p); if (g) return g; }
   const b = await loadBranch(String(p.branch_id ?? ""));
   if (!b) return json({ ok: false, error: "unknown_branch" });
   let q = supabase.from("staff").select("id, branch_id, name, label, active, pay, period").eq("branch_id", b.id);
@@ -1163,7 +1288,7 @@ async function handlePaySummary(p: Record<string, unknown>) {
 
 // Shifts that need a look: forgot to clock out, still open too long, very long or very short.
 async function handleReviewList(p: Record<string, unknown>) {
-  if (!(await checkAdminPin(String(p.admin_pin ?? "")))) return json({ ok: false, error: "wrong_admin_pin" });
+  { const g = await adminGate(p); if (g) return g; }
   const branchId = String(p.branch_id ?? "");
   const since = addDays(localDate(new Date()), -62);
   const { data } = await supabase.from("punches").select("*")
@@ -1206,7 +1331,7 @@ function readOverrides(p: Record<string, unknown>): Record<string, unknown> | st
 
 // Edit one shift (times in shop local "YYYY-MM-DDTHH:MM"), or just mark it as checked (review_ok only).
 async function handleEditPunch(p: Record<string, unknown>) {
-  if (!(await checkAdminPin(String(p.admin_pin ?? "")))) return json({ ok: false, error: "wrong_admin_pin" });
+  { const g = await adminGate(p); if (g) return g; }
   const { data: row } = await supabase.from("punches").select("*").eq("id", Number(p.id) || 0).maybeSingle();
   if (!row) return json({ ok: false, error: "not_found" });
   if (await isLocked(row.staff_id, row.work_date)) return json({ ok: false, error: "locked" });
@@ -1236,7 +1361,7 @@ async function handleEditPunch(p: Record<string, unknown>) {
 
 // Add a shift by hand (forgot to clock in, system was down, ...).
 async function handleAddPunch(p: Record<string, unknown>) {
-  if (!(await checkAdminPin(String(p.admin_pin ?? "")))) return json({ ok: false, error: "wrong_admin_pin" });
+  { const g = await adminGate(p); if (g) return g; }
   const { data: s } = await supabase.from("staff").select("id, branch_id").eq("id", Number(p.staff_id) || 0).maybeSingle();
   if (!s) return json({ ok: false, error: "unknown_staff" });
   const t = readShiftInput(p);
@@ -1257,7 +1382,7 @@ async function handleAddPunch(p: Record<string, unknown>) {
 }
 
 async function handleDeletePunch(p: Record<string, unknown>) {
-  if (!(await checkAdminPin(String(p.admin_pin ?? "")))) return json({ ok: false, error: "wrong_admin_pin" });
+  { const g = await adminGate(p); if (g) return g; }
   const { data: row } = await supabase.from("punches").select("*").eq("id", Number(p.id) || 0).maybeSingle();
   if (!row) return json({ ok: false, error: "not_found" });
   if (await isLocked(row.staff_id, row.work_date)) return json({ ok: false, error: "locked" });
@@ -1280,7 +1405,7 @@ function readAmount(v: unknown): number | null {
 }
 
 async function handleAddAdvance(p: Record<string, unknown>) {
-  if (!(await checkAdminPin(String(p.admin_pin ?? "")))) return json({ ok: false, error: "wrong_admin_pin" });
+  { const g = await adminGate(p); if (g) return g; }
   const { data: s } = await supabase.from("staff").select("id, branch_id").eq("id", Number(p.staff_id) || 0).maybeSingle();
   if (!s) return json({ ok: false, error: "unknown_staff" });
   const amount = readAmount(p.amount);
@@ -1303,7 +1428,7 @@ async function handleAddAdvance(p: Record<string, unknown>) {
 }
 
 async function handleDecideAdvance(p: Record<string, unknown>) {
-  if (!(await checkAdminPin(String(p.admin_pin ?? "")))) return json({ ok: false, error: "wrong_admin_pin" });
+  { const g = await adminGate(p); if (g) return g; }
   const status = p.approve ? "approved" : "rejected";
   const { data: a } = await supabase.from("advances").select("*").eq("id", Number(p.id) || 0).maybeSingle();
   if (!a) return json({ ok: false, error: "not_found" });
@@ -1315,7 +1440,7 @@ async function handleDecideAdvance(p: Record<string, unknown>) {
 }
 
 async function handleDeleteAdvance(p: Record<string, unknown>) {
-  if (!(await checkAdminPin(String(p.admin_pin ?? "")))) return json({ ok: false, error: "wrong_admin_pin" });
+  { const g = await adminGate(p); if (g) return g; }
   const { data: a } = await supabase.from("advances").select("*").eq("id", Number(p.id) || 0).maybeSingle();
   if (!a) return json({ ok: false, error: "not_found" });
   if (await isLocked(a.staff_id, a.date)) return json({ ok: false, error: "locked" });
@@ -1325,7 +1450,7 @@ async function handleDeleteAdvance(p: Record<string, unknown>) {
 }
 
 async function handleListAdvances(p: Record<string, unknown>) {
-  if (!(await checkAdminPin(String(p.admin_pin ?? "")))) return json({ ok: false, error: "wrong_admin_pin" });
+  { const g = await adminGate(p); if (g) return g; }
   const branchId = String(p.branch_id ?? "");
   const from = String(p.from ?? ""), to = String(p.to ?? "");
   let q = supabase.from("advances").select("*").eq("branch_id", branchId);
@@ -1348,9 +1473,11 @@ async function staffByPin(p: Record<string, unknown>): Promise<{ s: StaffFull; b
   if (!/^\d{4,6}$/.test(pin)) return "pin_invalid";
   const { data: s } = await supabase.from("staff").select("id, branch_id, name, label, active, pay, period, pin_hash")
     .eq("id", Number(p.staff_id) || 0).maybeSingle();
-  if (!s || !s.active || s.branch_id !== String(p.branch ?? "")) return "unknown_staff";
-  if (!s.pin_hash) return "no_pin";
-  if (!(await checkPassword(s.pin_hash, pin))) return "wrong_pin";
+  const kb = await branchFromKey(p);
+  if (!kb) return "bad_link";
+  if (!s || !s.active || s.branch_id !== kb.id) return "unknown_staff";
+  const pinErr = await staffPinError(s, pin);
+  if (pinErr) return pinErr;
   const b = await loadBranch(s.branch_id);
   if (!b) return "unknown_branch";
   return { s: s as StaffFull, b };
@@ -1408,6 +1535,8 @@ const ACTIONS: Record<string, (p: Record<string, unknown>) => Promise<Response>>
   save_staff_member: handleSaveStaffMember,
   punches_range: handlePunchesRange,
   save_branch_settings: handleSaveBranchSettings,
+  rotate_branch_key: handleRotateBranchKey,
+  security_events: handleSecurityEvents,
   pay_settings: handlePaySettings,
   save_pay_defaults: handleSavePayDefaults,
   save_staff_pay: handleSaveStaffPay,

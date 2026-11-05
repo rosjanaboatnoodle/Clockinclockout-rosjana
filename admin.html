@@ -133,11 +133,19 @@
       <div class="row">
         <select class="field" id="branchSelect" onchange="onBranchChange()"></select>
       </div>
-      <div class="hint" id="branchLink"></div>
+      <div class="hint" id="branchLinkTitle" style="margin:6px 0 4px;">🔗 ลิงก์ตอกบัตรของสาขานี้ (ส่งให้เฉพาะพนักงานสาขานี้)</div>
+      <div class="row">
+        <input class="field" id="branchLink" readonly onclick="this.select()">
+        <button class="btn dark" onclick="copyLink()">คัดลอก</button>
+        <button class="btn" onclick="rotateLink()">เปลี่ยนลิงก์</button>
+      </div>
+      <div class="hint">คนที่ไม่มีลิงก์นี้มองไม่เห็นสาขานี้ ถ้าลิงก์หลุด (เช่น มีคนลาออก) กด "เปลี่ยนลิงก์" ลิงก์เก่าจะใช้ไม่ได้ทันที แล้วส่งลิงก์ใหม่ให้ทุกคนในสาขา</div>
+      <div class="status" id="linkStatus"></div>
     </div>
 
     <!-- การตอกบัตร -->
     <div class="card" data-panel="punches">
+      <div class="reviewBox hidden" id="securityBox"></div>
       <div class="reviewBox hidden" id="reviewBox"></div>
       <div class="cardTitle">การตอกบัตร</div>
       <div class="row">
@@ -367,7 +375,11 @@
   function $(id){ return document.getElementById(id); }
   function el(tag, cls, text){ const e = document.createElement(tag); if (cls) e.className = cls; if (text !== undefined) e.textContent = text; return e; }
   function setMsg(id, text, ok){ const e = $(id); e.textContent = text; e.style.color = ok ? "#047857" : (ok === false ? "#dc2626" : "#374151"); }
-  function errText(j){ return !j ? "เชื่อมต่อไม่สำเร็จ" : (ERRORS[j.error] || ("ไม่สำเร็จ: " + (j.error || "unknown"))); }
+  function errText(j){
+    if (!j) return "เชื่อมต่อไม่สำเร็จ";
+    if (j.error === "too_many_tries") return "ใส่รหัสผิดหลายครั้ง ระบบล็อกไว้ อีก " + (j.minutes || 30) + " นาทีลองใหม่";
+    return ERRORS[j.error] || ("ไม่สำเร็จ: " + (j.error || "unknown"));
+  }
   function ssGet(k){ try{ return sessionStorage.getItem(k) || ""; } catch(e){ return ""; } }
   function ssSet(k, v){ try{ sessionStorage.setItem(k, v); } catch(e){} }
   function localDateStr(d){ return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0"); }
@@ -416,6 +428,7 @@
 
   async function tryLogin(pin){
     const j = await api({ action: "check_admin_pin", admin_pin: pin });
+    if (j && j.error === "too_many_tries"){ setMsg("loginStatus", errText(j), false); return true; }
     if (!j || !j.ok) return false;
     adminPin = pin;
     ssSet("clock_admin_pin", pin); // จำไว้เฉพาะแท็บนี้ ปิดแท็บแล้วต้องใส่ใหม่
@@ -436,7 +449,7 @@
   // ---------- สาขา ----------
 
   async function reloadBranches(selectId){
-    const j = await api({ action: "bootstrap", lang: "th" });
+    const j = await api({ action: "bootstrap", lang: "th", admin_pin: adminPin });
     if (j && j.ok) branches = j.branches || [];
     branchId = [selectId, branchId].find(id => id && branches.some(b => b.id === id)) || (branches[0] ? branches[0].id : "");
     const sel = $("branchSelect");
@@ -451,11 +464,32 @@
     const b = branches.find(x => x.id === branchId);
     $("brName").value = b ? b.name : "";
     fillGeo(b);
-    const link = new URL("index.html", location.href);
-    link.searchParams.set("branch", branchId);
-    $("branchLink").textContent = b ? "ลิงก์ตอกบัตรของสาขานี้: " + link.toString() : "";
+    $("branchLink").value = b ? staffLink(b) : "";
+    setMsg("linkStatus", "");
     // รายชื่อพนักงานต้องมาก่อน ส่วนอื่นใช้ชื่อจากรายชื่อนี้
     loadStaff().then(() => { loadPunches(); loadReview(); loadPaySettings(); });
+  }
+
+  function staffLink(b){
+    const link = new URL("index.html", location.href);
+    link.search = "";
+    link.searchParams.set("b", b.access_key || "");
+    return link.toString();
+  }
+
+  async function copyLink(){
+    const v = $("branchLink").value;
+    try{ await navigator.clipboard.writeText(v); setMsg("linkStatus", "คัดลอกแล้ว ส่งในกลุ่มไลน์ของสาขาได้เลย", true); }
+    catch(e){ $("branchLink").select(); setMsg("linkStatus", "กดค้างที่ช่องลิงก์แล้วเลือกคัดลอก"); }
+  }
+
+  async function rotateLink(){
+    const b = branches.find(x => x.id === branchId);
+    if (!b || !confirm("เปลี่ยนลิงก์ของสาขา \"" + b.name + "\"?\n\nลิงก์เก่าจะใช้ไม่ได้ทันที พนักงานทุกคนในสาขานี้ต้องเปิดลิงก์ใหม่ (และเพิ่มไอคอนหน้าจอโฮมใหม่)")) return;
+    const j = await api({ action: "rotate_branch_key", admin_pin: adminPin, branch_id: branchId });
+    if (!j || !j.ok){ setMsg("linkStatus", errText(j), false); return; }
+    await reloadBranches(branchId);
+    setMsg("linkStatus", "เปลี่ยนลิงก์แล้ว กด \"คัดลอก\" แล้วส่งลิงก์ใหม่ให้พนักงานสาขานี้", true);
   }
 
   async function renameBranch(){
@@ -662,8 +696,25 @@
     c.classList.toggle("hidden", !n);
   }
 
+  const LOCK_WHO = key => key === "admin" ? "รหัสแอดมิน" : (key.startsWith("staff:") ? "PIN ของ " + staffName(Number(key.slice(6))) : key);
+
+  async function loadSecurity(){
+    const j = await api({ action: "security_events", admin_pin: adminPin });
+    const box = $("securityBox");
+    box.innerHTML = "";
+    const ev = (j && j.ok && j.events) || [];
+    box.classList.toggle("hidden", !ev.length);
+    if (!ev.length) return;
+    box.appendChild(el("div", "cardTitle", "🔒 มีคนใส่รหัสผิดจนถูกล็อก (14 วันล่าสุด)"));
+    ev.slice(-5).reverse().forEach(e => {
+      box.appendChild(el("div", "sub", fmt(e.created_at) + " · " + LOCK_WHO(String((e.details || {}).key || ""))));
+    });
+    box.appendChild(el("div", "hint", "ถ้าไม่ใช่คนในร้านลืมรหัส: เปลี่ยนรหัสที่ถูกเดา และกด \"เปลี่ยนลิงก์\" ของสาขา"));
+  }
+
   async function loadReview(){
     if (!branchId || !adminPin) return;
+    loadSecurity();
     const j = await api({ action: "review_list", admin_pin: adminPin, branch_id: branchId });
     const box = $("reviewBox");
     box.innerHTML = "";

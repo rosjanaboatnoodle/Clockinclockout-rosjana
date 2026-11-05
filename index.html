@@ -245,6 +245,8 @@
   let dict = {};
   let branches = [];   // [{ id, name, staff: [{ id, name, label, short }] }]
   let branchId = "";
+  // รหัสลับของสาขาจากลิงก์ (?b=...) จำไว้ในเครื่อง เปิดจากไอคอนหน้าจอโฮมครั้งต่อไปก็ใช้ได้
+  let KEY = "";
   let punches = [];    // today's shifts
   let messages = [];   // today's calendar messages
   let week = null;     // next 7 days from the calendar (null = no calendar app)
@@ -295,13 +297,21 @@
   // ---------- โหลดข้อมูล + ภาษา ----------
 
   async function bootstrap(){
-    const cacheKey = "clock_boot_" + lang;
-    const cached = lsGet(cacheKey);
+    const cacheKey = "clock_boot_" + lang + "_" + KEY;
+    const cached = KEY ? lsGet(cacheKey) : null;
     if (cached){ try{ applyBoot(JSON.parse(cached)); } catch(e){} }
-    const j = await api({ action: "bootstrap", lang });
+    const j = await api({ action: "bootstrap", lang, key: KEY });
     if (j && j.ok){
+      if (j.bad_link){
+        // แอดมินเปลี่ยนลิงก์แล้ว: ลืมรหัสเก่าและข้อมูลที่เก็บไว้
+        lsSet("clock_key", ""); lsSet(cacheKey, "");
+        KEY = "";
+        applyBoot(j);
+        showBanner(t("badLink"));
+        return;
+      }
       applyBoot(j);
-      lsSet(cacheKey, JSON.stringify({ branches: j.branches, dict: j.dict, has_admin: j.has_admin, tz: j.tz }));
+      if (KEY) lsSet(cacheKey, JSON.stringify({ branches: j.branches, dict: j.dict, has_admin: j.has_admin, tz: j.tz }));
     } else if (!cached){
       showBanner(t("connectFail"));
     }
@@ -312,7 +322,9 @@
     dict = j.dict || {};
     if (j.tz) SHOP_TZ = j.tz;
     applyUiText();
-    if (j.has_admin === false) showBanner(t("notSetup")); else showBanner("");
+    if (j.has_admin === false) showBanner(t("notSetup"));
+    else if (!KEY) showBanner(t("needLink"));
+    else showBanner("");
     renderBranchPicker();
   }
 
@@ -342,8 +354,8 @@
   // ---------- สาขา ----------
 
   function renderBranchPicker(){
-    const fromUrl = new URLSearchParams(location.search).get("branch");
-    const wanted = [branchId, fromUrl, lsGet("clock_branch")].find(id => id && branches.some(b => b.id === id));
+    // ลิงก์หนึ่งลิงก์ = หนึ่งสาขา ไม่มีตัวเลือกสาขาอื่นให้เห็น
+    const wanted = [branchId].find(id => id && branches.some(b => b.id === id));
     const next = wanted || (branches[0] ? branches[0].id : "");
     const changed = next !== branchId;
     branchId = next;
@@ -375,7 +387,7 @@
   async function loadToday(){
     if (!branchId) return;
     const want = branchId;
-    const j = await api({ action: "today", branch: branchId, lang });
+    const j = await api({ action: "today", key: KEY, lang });
     if (want !== branchId) return;
     if (j && j.ok){
       punches = j.punches || [];
@@ -571,7 +583,8 @@
 
   const ERROR_KEYS = {
     wrong_pin: "wrongPin", pin_invalid: "pinInvalid", no_pin: "noPin", already_in: "alreadyIn", not_in: "notIn",
-    gps_required: "gpsRequired", photo_required: "photoRequired", bad_photo: "photoFail", photo_too_large: "photoFail"
+    gps_required: "gpsRequired", photo_required: "photoRequired", bad_photo: "photoFail", photo_too_large: "photoFail",
+    too_many_tries: "tooManyTries", bad_link: "badLink"
   };
 
   function errorText(j){
@@ -601,7 +614,7 @@
     document.getElementById("btnIn").disabled = true;
     document.getElementById("btnOut").disabled = true;
     setResult(t("saving"), "");
-    const j = await api(Object.assign({ action: "punch", branch: branchId, staff_id: current.id, pin, type, lang }, extra));
+    const j = await api(Object.assign({ action: "punch", key: KEY, staff_id: current.id, pin, type, lang }, extra));
     busy = false;
     document.getElementById("btnIn").disabled = false;
     document.getElementById("btnOut").disabled = false;
@@ -637,7 +650,7 @@
     const pin = document.getElementById("pinInput").value.trim();
     if (!/^\d{4,6}$/.test(pin)){ setResult(t("pinInvalid"), "err"); document.getElementById("pinInput").focus(); return; }
     setResult("", "");
-    const j = await api({ action: "my_summary", branch: branchId, staff_id: current.id, pin, lang });
+    const j = await api({ action: "my_summary", key: KEY, staff_id: current.id, pin, lang });
     if (!j || !j.ok){ setResult(errorText(j), "err"); return; }
     renderMy(j, pin);
     renderDuties(j.my_duties);
@@ -686,10 +699,10 @@
       const n = Number(amount.value);
       if (!(n > 0)){ msg.textContent = t("badAmount"); msg.className = "result err"; return; }
       send.disabled = true;
-      const r = await api({ action: "request_advance", branch: branchId, staff_id: current.id, pin, amount: n, item: item.value.trim() });
+      const r = await api({ action: "request_advance", key: KEY, staff_id: current.id, pin, amount: n, item: item.value.trim() });
       send.disabled = false;
       if (!r || !r.ok){ msg.textContent = r && r.error === "bad_amount" ? t("badAmount") : (r && r.error === "advance_off" ? t("advanceOff") : (r && r.error === "locked" ? t("locked") : errorText(r))); msg.className = "result err"; return; }
-      const again = await api({ action: "my_summary", branch: branchId, staff_id: current.id, pin, lang });
+      const again = await api({ action: "my_summary", key: KEY, staff_id: current.id, pin, lang });
       if (again && again.ok) renderMy(again, pin);
       const m2 = document.querySelector("#myBox .result");
       if (m2){ m2.textContent = r.status === "approved" ? t("reqApproved") : t("reqPending"); m2.className = "result ok"; }
@@ -774,7 +787,7 @@
     const want = monthView;
     monthDays = {};
     renderMonthView();
-    const j = await api({ action: "schedule_month", branch: branchId, month: monthView, lang });
+    const j = await api({ action: "schedule_month", key: KEY, month: monthView, lang });
     if (want !== monthView || !j || !j.ok) return;
     (j.days || []).forEach(d => { monthDays[d.date] = d.items; });
     renderMonthView();
@@ -822,6 +835,9 @@
   setInterval(tick, 1000);
 
   (async function init(){
+    const fromUrl = new URLSearchParams(location.search).get("b");
+    if (fromUrl && /^[a-f0-9]{8,64}$/i.test(fromUrl)){ KEY = fromUrl.toLowerCase(); lsSet("clock_key", KEY); }
+    else KEY = lsGet("clock_key") || "";
     const saved = lsGet("clock_lang");
     lang = LOCALE[saved] ? saved : "th";
     applyUiText();
