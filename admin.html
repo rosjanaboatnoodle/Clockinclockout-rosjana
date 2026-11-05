@@ -2,7 +2,16 @@
 <html lang="th">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<!-- เพิ่มไปหน้าจอโฮมแล้วเปิดเต็มจอ ไม่มีแถบ Safari -->
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="แอดมินตอกบัตร">
+<meta name="theme-color" content="#5b73ff">
+<link rel="manifest" href="admin.webmanifest">
+<link rel="apple-touch-icon" href="icon-180.png">
+<link rel="icon" type="image/png" sizes="32x32" href="favicon-32.png">
 <meta name="robots" content="noindex">
 <title>แอดมิน — ตอกบัตร</title>
 <style>
@@ -14,7 +23,7 @@
     background: linear-gradient(180deg, var(--bg1), var(--bg2));
     min-height:100vh; color:#111;
   }
-  .wrap{ max-width: 820px; margin:0 auto; padding: 24px 16px 60px; }
+  .wrap{ max-width: 820px; margin:0 auto; padding: calc(24px + env(safe-area-inset-top)) calc(16px + env(safe-area-inset-right)) calc(60px + env(safe-area-inset-bottom)) calc(16px + env(safe-area-inset-left)); }
   h1{ margin: 4px 0 12px; font-size: 22px; color:#fff; }
   .card{ background:#fff; border-radius:18px; padding:14px; box-shadow: var(--shadow); margin-bottom:12px; }
   .cardTitle{ font-weight:900; font-size:16px; color:var(--ink); margin-bottom:8px; }
