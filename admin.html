@@ -210,6 +210,7 @@
         <button class="btn" onclick="shiftWeek(7)">สัปดาห์ถัดไป ›</button>
       </div>
       <div class="hint">ตัวหนา/กรอบม่วง = จัดเองในตาราง · ตัวปกติ = ตามกะประจำ/กะตามวัน · เลือก "ตามปกติ" เพื่อยกเลิกที่จัดเอง</div>
+      <div class="hint">คนที่ขึ้นว่า "ยังไม่ได้ตั้ง มีกะ": ไปที่แท็บเงิน → เวลางาน = "มีกะ" (ทั้งสาขา) หรือแท็บพนักงาน → 💰 (รายคน) แล้วเลือกกะประจำ</div>
       <div class="tableWrap"><table class="roster" id="rosterTable"></table></div>
       <div class="status" id="rosterStatus"></div>
     </div>
@@ -1299,7 +1300,7 @@
     j.staff.forEach(person => {
       const tr = el("tr");
       const nm = el("td", "", person.label);
-      if (person.work_mode !== "shift") nm.appendChild(el("div", "sub", "ไม่ได้ใช้กะ"));
+      if (person.work_mode !== "shift") nm.appendChild(el("div", "sub", "ยังไม่ได้ตั้ง \"มีกะ\""));
       tr.appendChild(nm);
       for (let i = 0; i < 7; i++){
         const d = addD(rosterStart, i);
