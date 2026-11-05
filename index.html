@@ -1,0 +1,421 @@
+<!doctype html>
+<html lang="th">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ตอกบัตรเข้า-ออกงาน</title>
+<style>
+  :root{
+    --bg1:#5b73ff;
+    --bg2:#bf2cff;
+    --ink:#1d2b6a;
+    --muted:#6c75a8;
+    --shadow: 0 10px 24px rgba(0,0,0,.18);
+  }
+  *{ box-sizing:border-box; }
+  body{
+    margin:0;
+    font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans Thai", "Noto Sans Myanmar", "Noto Sans Lao", "Noto Sans Khmer", Arial, sans-serif;
+    background: linear-gradient(180deg, var(--bg1), var(--bg2));
+    min-height:100vh;
+    color:#111;
+  }
+  .wrap{ max-width: 760px; margin:0 auto; padding: 24px 16px 60px; }
+  .panel{ background: rgba(255,255,255,.14); border-radius: 22px; padding: 18px 16px 24px; }
+  .topbar{ display:flex; align-items:center; justify-content:space-between; gap:10px; }
+  h1{ margin: 4px 0; font-size: 22px; color:#fff; }
+  .langSelect{ border:none; background:rgba(255,255,255,.22); color:#fff; font-weight:900; font-size:13px; padding:9px 8px; border-radius:999px; }
+  .langSelect option{ color:#111827; }
+  .clock{ color:#fff; font-weight:900; font-size:34px; letter-spacing:1px; margin-top:6px; }
+  .date{ color:rgba(255,255,255,.9); font-weight:800; font-size:14px; margin-bottom:12px; }
+  .branchBar{ display:flex; align-items:center; gap:8px; margin-bottom:12px; }
+  .branchBar select{ flex:1; min-width:0; padding:9px 10px; border-radius:12px; border:none; font-size:15px; font-weight:800; color:#0f172a; background:rgba(255,255,255,.92); }
+  .branchName{ color:#fff; font-weight:900; font-size:15px; margin-bottom:12px; }
+  .banner{ background:rgba(255,255,255,.92); border-radius:14px; padding:10px 12px; font-weight:800; font-size:14px; color:#0f172a; margin-bottom:12px; box-shadow: var(--shadow); }
+  .banner.warn{ background:#fef3c7; color:#92400e; }
+
+  .card{ background: rgba(232,233,255,.94); border-radius: 18px; padding: 12px; box-shadow: var(--shadow); margin-bottom: 12px; }
+  .cardTitle{ font-weight:900; font-size:15px; color:var(--ink); margin-bottom:8px; }
+  .cardHint{ font-size:12px; font-weight:700; color:var(--muted); margin:-4px 0 8px; }
+
+  .msgList{ display:flex; flex-direction:column; gap:8px; }
+  .msgItem{ border-left:5px solid #8b5cf6; background:#fff; border-radius:10px; padding:9px 11px; }
+  .msgItem.mine{ outline:3px solid #f59e0b; }
+  .msgName{ font-size:12px; font-weight:900; color:#6b7280; margin-bottom:2px; }
+  .msgText{ font-size:15px; font-weight:800; color:#111827; white-space:pre-wrap; }
+  .mineTag{ display:inline-block; font-size:11px; font-weight:900; background:#f59e0b; color:#fff; border-radius:999px; padding:1px 8px; margin-left:6px; }
+
+  .pills{ display:grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap:8px; }
+  .pill{ border:none; background:#fff; border-radius:14px; padding:12px 10px; text-align:left; cursor:pointer; box-shadow: 0 2px 6px rgba(0,0,0,.06); }
+  .pill:active{ transform: translateY(1px); }
+  .pillName{ font-weight:900; font-size:15px; color:#0f172a; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .pillState{ font-size:12px; font-weight:800; margin-top:3px; display:flex; align-items:center; gap:5px; color:#6b7280; }
+  .dot{ width:9px; height:9px; border-radius:50%; background:#cbd5e1; flex:none; }
+  .dot.working{ background:#10b981; }
+  .dot.done{ background:#64748b; }
+
+  .history{ display:flex; flex-direction:column; gap:6px; }
+  .hRow{ background:#fff; border-radius:10px; padding:8px 10px; display:flex; justify-content:space-between; align-items:center; gap:8px; font-size:14px; }
+  .hName{ font-weight:900; color:#0f172a; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .hTimes{ font-weight:800; color:#374151; white-space:nowrap; font-variant-numeric: tabular-nums; }
+  .hForgot{ color:#b45309; }
+  .empty{ font-size:14px; font-weight:800; color:var(--muted); padding:6px 2px; }
+
+  .overlay{ position:fixed; inset:0; background:rgba(0,0,0,.45); display:none; align-items:center; justify-content:center; padding:18px; z-index:99; }
+  .overlay.show{ display:flex; }
+  .modal{ width:min(420px,100%); max-height:calc(100vh - 36px); overflow:auto; background:#fff; border-radius:18px; padding:18px; box-shadow: var(--shadow); }
+  .modalTitle{ font-weight:900; color:#0f172a; font-size:18px; margin-bottom:4px; }
+  .modalSub{ font-size:13px; font-weight:700; color:#6b7280; margin-bottom:12px; }
+  .pinInput{ width:100%; font-size:28px; letter-spacing:10px; text-align:center; padding:10px; border-radius:12px; border:2px solid #c7d2fe; font-weight:900; }
+  .btnRow{ display:flex; gap:10px; margin-top:12px; }
+  .btn{ flex:1; border:none; border-radius:14px; padding:14px 10px; font-weight:900; font-size:16px; cursor:pointer; }
+  .btnIn{ background:#10b981; color:#fff; }
+  .btnOut{ background:#0f172a; color:#fff; }
+  .btnClose{ background:#e5e7eb; color:#111827; width:100%; margin-top:10px; }
+  .btn:disabled{ opacity:.5; }
+  .result{ font-size:15px; font-weight:900; margin-top:10px; min-height:20px; }
+  .result.ok{ color:#047857; }
+  .result.err{ color:#dc2626; }
+  .fine{ font-size:11.5px; color:#6b7280; font-weight:700; margin-top:10px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="panel">
+    <div class="topbar">
+      <h1 data-t="title">ตอกบัตรเข้า-ออกงาน</h1>
+      <select class="langSelect" id="langSelect" onchange="setLang(this.value)" aria-label="Language">
+        <option value="th">ไทย</option>
+        <option value="en">English</option>
+        <option value="my">မြန်မာ</option>
+        <option value="lo">ລາວ</option>
+        <option value="km">ខ្មែរ</option>
+        <option value="vi">Tiếng Việt</option>
+      </select>
+    </div>
+    <div class="clock" id="clock">--:--</div>
+    <div class="date" id="dateText"></div>
+
+    <div class="branchBar" id="branchBar" style="display:none;">
+      <select id="branchSelect" onchange="selectBranch(this.value)" aria-label="Branch"></select>
+    </div>
+    <div class="branchName" id="branchName"></div>
+    <div class="banner warn" id="banner" style="display:none;"></div>
+
+    <div class="card" id="msgCard" style="display:none;">
+      <div class="cardTitle" data-t="todayTitle">📌 วันนี้</div>
+      <div class="msgList" id="msgList"></div>
+    </div>
+
+    <div class="card">
+      <div class="cardTitle" data-t="staffTitle">พนักงาน</div>
+      <div class="cardHint" data-t="staffHint">กดที่ชื่อของคุณ แล้วใส่ PIN</div>
+      <div class="pills" id="pills"></div>
+    </div>
+
+    <div class="card">
+      <div class="cardTitle" data-t="historyTitle">ประวัติวันนี้</div>
+      <div class="history" id="history"></div>
+    </div>
+  </div>
+</div>
+
+<div class="overlay" id="punchOverlay">
+  <div class="modal">
+    <div class="modalTitle" id="punchName"></div>
+    <div class="modalSub" data-t="pinHint">ใส่ PIN ของคุณ เวลาจะถูกบันทึกอัตโนมัติ</div>
+    <input class="pinInput" id="pinInput" type="password" inputmode="numeric" maxlength="6" autocomplete="off" placeholder="••••">
+    <div class="btnRow">
+      <button class="btn btnIn" id="btnIn" onclick="punch('in')" data-t="clockIn">✅ เข้างาน</button>
+      <button class="btn btnOut" id="btnOut" onclick="punch('out')" data-t="clockOut">⬛ ออกงาน</button>
+    </div>
+    <div class="result" id="punchResult"></div>
+    <div class="msgList" id="punchMsgs" style="margin-top:10px;"></div>
+    <button class="btn btnClose" onclick="closePunch()" data-t="close">ปิด</button>
+    <div class="fine" data-t="fineprint">* ระบบบันทึกเวลาตามเวลาของร้าน พนักงานแก้เวลาเองไม่ได้</div>
+  </div>
+</div>
+
+<script src="ui-text.js"></script>
+<script>
+  // ข้อมูลอยู่ใน Supabase (Edge Function "clock") ดูวิธีตั้งค่าใน README.md
+  // ใส่ค่าจาก Supabase Dashboard -> Project Settings -> API:
+  //   PROJECT_REF = ส่วนหน้าของ Project URL (https://<PROJECT_REF>.supabase.co)
+  //   SUPABASE_KEY = publishable key (sb_publishable_...) ฝังในหน้าเว็บได้ ข้อมูลจริงถูกล็อกด้วย RLS
+  const PROJECT_REF = "omsnqbuzyxyrsihybwmk";
+  const SUPABASE_KEY = "sb_publishable_AJkk4TDhKpPNqY107qn-5g_85aRgyJb";
+  const API = "https://" + PROJECT_REF + ".supabase.co/functions/v1/clock";
+
+  const LOCALE = { th: "th-TH", en: "en-GB", my: "my-MM", lo: "lo-LA", km: "km-KH", vi: "vi-VN" };
+
+  let lang = "th";
+  let dict = {};
+  let branches = [];   // [{ id, name, staff: [{ id, name, label, short }] }]
+  let branchId = "";
+  let punches = [];    // today's shifts
+  let messages = [];   // today's calendar messages
+  let current = null;  // person in the PIN window
+  let busy = false;
+
+  function t(key){ return dict["ui.clock." + key] || UI_TH[key] || key; }
+  function el(tag, cls, text){ const e = document.createElement(tag); if (cls) e.className = cls; if (text !== undefined) e.textContent = text; return e; }
+  function lsGet(k){ try{ return localStorage.getItem(k); } catch(e){ return null; } }
+  function lsSet(k, v){ try{ localStorage.setItem(k, v); } catch(e){} }
+  function currentBranch(){ return branches.find(b => b.id === branchId) || null; }
+  function staffById(id){ return ((currentBranch() || {}).staff || []).find(s => s.id === id); }
+  function fmtTime(iso){
+    if (!iso) return "--:--";
+    try{ return new Intl.DateTimeFormat(LOCALE[lang], { hour: "2-digit", minute: "2-digit", hour12: false }).format(new Date(iso)); }
+    catch(e){ return new Date(iso).toTimeString().slice(0, 5); }
+  }
+
+  async function api(params){
+    try{
+      const r = await fetch(API, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Authorization": "Bearer " + SUPABASE_KEY, "apikey": SUPABASE_KEY },
+        body: JSON.stringify(params)
+      });
+      return await r.json().catch(() => null);
+    } catch(e){ return null; }
+  }
+
+  // ---------- เวลา ----------
+
+  function tick(){
+    const now = new Date();
+    try{
+      document.getElementById("clock").textContent = new Intl.DateTimeFormat(LOCALE[lang], { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false }).format(now);
+      document.getElementById("dateText").textContent = new Intl.DateTimeFormat(LOCALE[lang], { weekday: "long", day: "numeric", month: "long", year: "numeric" }).format(now);
+    } catch(e){
+      document.getElementById("clock").textContent = now.toTimeString().slice(0, 8);
+    }
+  }
+
+  // ---------- โหลดข้อมูล + ภาษา ----------
+
+  async function bootstrap(){
+    const cacheKey = "clock_boot_" + lang;
+    const cached = lsGet(cacheKey);
+    if (cached){ try{ applyBoot(JSON.parse(cached)); } catch(e){} }
+    const j = await api({ action: "bootstrap", lang });
+    if (j && j.ok){
+      applyBoot(j);
+      lsSet(cacheKey, JSON.stringify({ branches: j.branches, dict: j.dict, has_admin: j.has_admin }));
+    } else if (!cached){
+      showBanner(t("connectFail"));
+    }
+  }
+
+  function applyBoot(j){
+    branches = j.branches || [];
+    dict = j.dict || {};
+    applyUiText();
+    if (j.has_admin === false) showBanner(t("notSetup")); else showBanner("");
+    renderBranchPicker();
+  }
+
+  function showBanner(text){
+    const b = document.getElementById("banner");
+    b.textContent = text;
+    b.style.display = text ? "" : "none";
+  }
+
+  function applyUiText(){
+    document.documentElement.lang = lang;
+    document.querySelectorAll("[data-t]").forEach(e => { e.textContent = t(e.dataset.t); });
+    document.getElementById("langSelect").value = lang;
+    tick();
+    if (PROJECT_REF.startsWith("YOUR_") || SUPABASE_KEY.startsWith("YOUR_")){
+      showBanner("⚠️ ยังไม่ได้ตั้งค่า Supabase: ใส่ PROJECT_REF และ SUPABASE_KEY ใน index.html");
+    }
+  }
+
+  async function setLang(next){
+    lang = LOCALE[next] ? next : "th";
+    lsSet("clock_lang", lang);
+    await bootstrap();
+    loadToday();
+  }
+
+  // ---------- สาขา ----------
+
+  function renderBranchPicker(){
+    const fromUrl = new URLSearchParams(location.search).get("branch");
+    const wanted = [branchId, fromUrl, lsGet("clock_branch")].find(id => id && branches.some(b => b.id === id));
+    const next = wanted || (branches[0] ? branches[0].id : "");
+    const changed = next !== branchId;
+    branchId = next;
+
+    const sel = document.getElementById("branchSelect");
+    sel.innerHTML = "";
+    branches.forEach(b => { const o = el("option", "", b.name); o.value = b.id; sel.appendChild(o); });
+    sel.value = branchId;
+    document.getElementById("branchBar").style.display = branches.length > 1 ? "flex" : "none";
+    const b = currentBranch();
+    document.getElementById("branchName").textContent = (branches.length === 1 && b) ? b.name : "";
+    renderAll();
+    if (changed) loadToday();
+  }
+
+  function selectBranch(id){
+    branchId = id;
+    lsSet("clock_branch", id);
+    const url = new URL(location.href);
+    url.searchParams.set("branch", id);
+    history.replaceState(null, "", url);
+    punches = []; messages = [];
+    renderAll();
+    loadToday();
+  }
+
+  // ---------- วันนี้ ----------
+
+  async function loadToday(){
+    if (!branchId) return;
+    const want = branchId;
+    const j = await api({ action: "today", branch: branchId, lang });
+    if (want !== branchId) return;
+    if (j && j.ok){
+      punches = j.punches || [];
+      messages = j.messages || [];
+      renderAll();
+    }
+  }
+
+  function renderAll(){
+    renderMessages(document.getElementById("msgList"), messages, null);
+    document.getElementById("msgCard").style.display = messages.length ? "" : "none";
+    renderPills();
+    renderHistory();
+  }
+
+  // forName: highlight duties of this person (staff.name)
+  function renderMessages(box, list, forName){
+    box.innerHTML = "";
+    list.forEach(m => {
+      const mine = forName && m.person === forName;
+      const item = el("div", "msgItem" + (mine ? " mine" : ""));
+      item.style.borderLeftColor = m.color || "#8b5cf6";
+      const head = el("div", "msgName", m.name + (m.person ? " — " + labelOf(m.person) : ""));
+      if (mine) head.appendChild(el("span", "mineTag", t("yourDuty")));
+      item.appendChild(head);
+      item.appendChild(el("div", "msgText", m.message));
+      box.appendChild(item);
+    });
+  }
+
+  function labelOf(name){
+    const s = ((currentBranch() || {}).staff || []).find(x => x.name === name);
+    return s ? s.label : name;
+  }
+
+  function stateOf(staffId){
+    const mine = punches.filter(p => p.staff_id === staffId);
+    if (mine.some(p => !p.check_out && !p.forgot_out)) return "working";
+    if (mine.some(p => p.check_out)) return "done";
+    return "notYet";
+  }
+
+  function renderPills(){
+    const box = document.getElementById("pills");
+    box.innerHTML = "";
+    const staff = (currentBranch() || {}).staff || [];
+    if (!staff.length && branchId){ box.appendChild(el("div", "empty", t("noStaff"))); return; }
+    staff.forEach(s => {
+      const btn = el("button", "pill");
+      btn.onclick = () => openPunch(s);
+      btn.appendChild(el("div", "pillName", s.label));
+      const st = stateOf(s.id);
+      const state = el("div", "pillState");
+      state.appendChild(el("span", "dot " + st));
+      state.appendChild(document.createTextNode(t(st)));
+      btn.appendChild(state);
+      box.appendChild(btn);
+    });
+  }
+
+  function renderHistory(){
+    const box = document.getElementById("history");
+    box.innerHTML = "";
+    if (!punches.length){ box.appendChild(el("div", "empty", t("noHistory"))); return; }
+    punches.slice().reverse().forEach(p => {
+      const s = staffById(p.staff_id);
+      const row = el("div", "hRow");
+      row.appendChild(el("div", "hName", s ? s.label : "#" + p.staff_id));
+      const out = p.forgot_out ? t("forgotOut") : (p.check_out ? fmtTime(p.check_out) : "…");
+      const times = el("div", "hTimes" + (p.forgot_out ? " hForgot" : ""), t("inLabel") + " " + fmtTime(p.check_in) + " · " + t("outLabel") + " " + out);
+      row.appendChild(times);
+      box.appendChild(row);
+    });
+  }
+
+  // ---------- ตอกบัตร ----------
+
+  function openPunch(s){
+    current = s;
+    document.getElementById("punchName").textContent = s.label;
+    document.getElementById("pinInput").value = "";
+    setResult("", "");
+    document.getElementById("punchMsgs").innerHTML = "";
+    document.getElementById("punchOverlay").classList.add("show");
+    setTimeout(() => document.getElementById("pinInput").focus(), 50);
+  }
+
+  function closePunch(){
+    document.getElementById("punchOverlay").classList.remove("show");
+    document.getElementById("pinInput").value = "";
+    current = null;
+  }
+
+  function setResult(text, kind){
+    const r = document.getElementById("punchResult");
+    r.textContent = text;
+    r.className = "result" + (kind ? " " + kind : "");
+  }
+
+  const ERROR_KEYS = { wrong_pin: "wrongPin", pin_invalid: "pinInvalid", no_pin: "noPin", already_in: "alreadyIn", not_in: "notIn" };
+
+  async function punch(type){
+    if (busy || !current) return;
+    const pin = document.getElementById("pinInput").value.trim();
+    if (!/^\d{4,6}$/.test(pin)){ setResult(t("pinInvalid"), "err"); return; }
+    busy = true;
+    document.getElementById("btnIn").disabled = true;
+    document.getElementById("btnOut").disabled = true;
+    setResult(t("saving"), "");
+    const j = await api({ action: "punch", branch: branchId, staff_id: current.id, pin, type, lang });
+    busy = false;
+    document.getElementById("btnIn").disabled = false;
+    document.getElementById("btnOut").disabled = false;
+    if (!j || !j.ok){
+      const key = j && ERROR_KEYS[j.error];
+      setResult(key ? t(key) + (j.error === "already_in" && j.check_in ? " (" + t("inLabel") + " " + fmtTime(j.check_in) + ")" : "") : (j ? j.error : t("connectFail")), "err");
+      if (j && j.error === "wrong_pin") document.getElementById("pinInput").select();
+      return;
+    }
+    document.getElementById("pinInput").value = "";
+    const time = fmtTime(type === "in" ? j.punch.check_in : j.punch.check_out);
+    const okText = j.status === "ok_out" ? t("successOut") : (j.status === "ok_in_after_forgot" ? t("successInForgot") : t("successIn"));
+    setResult(okText + " " + time, "ok");
+    punches = j.punches || punches;
+    messages = j.messages || messages;
+    renderAll();
+    // หลังเข้างาน โชว์ข้อความของวันนี้ ไฮไลต์เวรของคนนี้
+    if (type === "in") renderMessages(document.getElementById("punchMsgs"), messages, j.staff_name);
+  }
+
+  // ข้อมูลวันนี้อัปเดตเองเป็นระยะ และเมื่อกลับมาเปิดหน้านี้
+  document.addEventListener("visibilitychange", () => { if (!document.hidden) loadToday(); });
+  setInterval(() => { if (!document.hidden) loadToday(); }, 120000);
+  setInterval(tick, 1000);
+
+  (async function init(){
+    const saved = lsGet("clock_lang");
+    lang = LOCALE[saved] ? saved : "th";
+    applyUiText();
+    await bootstrap(); // เลือกสาขาแล้วจะโหลดข้อมูลวันนี้ให้เอง
+  })();
+</script>
+</body>
+</html>
