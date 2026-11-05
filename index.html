@@ -102,6 +102,7 @@
   .weekItems{ display:flex; gap:5px; flex-wrap:wrap; flex:1; min-width:0; }
   .tag{ color:#fff; font-size:12px; font-weight:900; border-radius:999px; padding:2px 9px; max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .weekNone{ color:var(--muted); font-weight:800; font-size:13px; }
+  .moreBtn{ display:block; width:100%; margin-top:6px; border:none; background:transparent; color:#4338ca; font-weight:900; font-size:13px; padding:6px; cursor:pointer; }
   .linkBtn{ border:none; background:#fff; color:#4338ca; font-weight:900; font-size:13px; border-radius:999px; padding:7px 12px; cursor:pointer; }
   .cardHead{ display:flex; justify-content:space-between; align-items:center; gap:8px; margin-bottom:6px; }
   .cardHead .cardTitle{ margin:0; }
@@ -171,10 +172,11 @@
 
     <div class="card" id="weekCard" style="display:none;">
       <div class="cardHead">
-        <div class="cardTitle" data-t="weekTitle">📅 ตารางงาน 7 วัน</div>
+        <div class="cardTitle" data-t="weekTitle">📅 ตารางงาน</div>
         <button class="linkBtn" onclick="openMonth()" data-t="seeMonth">ดูทั้งเดือน</button>
       </div>
       <div id="weekList"></div>
+      <button class="moreBtn" id="weekMore" onclick="toggleWeek()"></button>
     </div>
 
     <div class="card">
@@ -796,6 +798,10 @@
   function tagText(i){ return i.kind === "person" ? (i.short ? i.short + " " : "") + labelOf(i.person || "") : (i.short || i.name); }
   function addTag(box, i){ const g = el("span", "tag", tagText(i)); g.style.background = i.color || "#8b5cf6"; g.title = i.message || i.name; box.appendChild(g); }
 
+  // แสดง 3 วันก่อน (วันนี้ พรุ่งนี้ มะรืน) กด "ดูเพิ่ม" ถึงกางเป็น 7 วัน
+  let weekExpanded = false;
+  function toggleWeek(){ weekExpanded = !weekExpanded; renderWeek(); }
+
   function renderWeek(){
     const card = document.getElementById("weekCard");
     if (week === null){ card.style.display = "none"; return; }
@@ -805,7 +811,9 @@
     const today = shopToday();
     const byDate = {};
     week.forEach(d => { byDate[d.date] = d.items; });
-    for (let n = 0; n < 7; n++){
+    const showDays = weekExpanded ? 7 : 3;
+    document.getElementById("weekMore").textContent = weekExpanded ? t("showLess") : t("showMore");
+    for (let n = 0; n < showDays; n++){
       const d = plusDays(today, n);
       const row = el("div", "weekRow" + (n === 0 ? " today" : ""));
       row.appendChild(el("div", "weekDay", dayLabel(d)));
