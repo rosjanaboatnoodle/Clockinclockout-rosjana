@@ -200,6 +200,7 @@ function dictFor(rows: TranslationRow[], lang: Lang): Record<string, string> {
 }
 
 const GEMINI_MODEL = "gemini-2.5-flash";
+const TRANSLATE_BATCH = 20;
 
 async function callGeminiJson(prompt: string): Promise<unknown> {
   const apiKey = Deno.env.get("GEMINI_API_KEY");
@@ -210,7 +211,7 @@ async function callGeminiJson(prompt: string): Promise<unknown> {
     {
       method: "POST",
       headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
-      body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { responseMimeType: "application/json" } }),
+      body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { responseMimeType: "application/json", thinkingConfig: { thinkingBudget: 0 } } }),
     },
     90000,
   );
@@ -225,8 +226,8 @@ async function callGeminiJson(prompt: string): Promise<unknown> {
 async function aiTranslate(texts: Record<string, string>): Promise<Record<string, Record<string, string>>> {
   const entries = Object.entries(texts).filter(([, th]) => th.trim());
   const out: Record<string, Record<string, string>> = {};
-  for (let i = 0; i < entries.length; i += 40) {
-    const chunk = Object.fromEntries(entries.slice(i, i + 40));
+  for (let i = 0; i < entries.length; i += 20) {
+    const chunk = Object.fromEntries(entries.slice(i, i + 20));
     const prompt = `You translate short messages for staff of a Thai restaurant (calendar, duty roster, time clock).
 Translate every Thai value in this JSON into: ${LANGS.map((l) => `"${l}" = ${LANG_NAMES[l]}`).join(", ")}.
 Keep placeholders like {name} exactly as they are. Keep it short, simple and friendly, the way a manager talks to staff.
@@ -316,6 +317,9 @@ async function handleTranslatePage(p: Record<string, unknown>) {
     }
     const keys = Object.keys(texts);
     if (keys.length > 300) return json({ ok: false, error: "too_many_texts" });
+    // One small batch per request so a request never runs into the platform's time limit.
+    // The page calls again with `skip` = keys already done in this run, until remaining is 0.
+    const skip = new Set(Array.isArray(p.skip) ? (p.skip as unknown[]).map(String) : []);
     const existing = new Map((await getTranslations(keys)).map((r) => [r.key, r]));
     const todo: Record<string, string> = {};
     for (const key of keys) {
@@ -323,8 +327,11 @@ async function handleTranslatePage(p: Record<string, unknown>) {
       const prev = existing.get(key);
       const thChanged = !prev || prev.th !== th;
       const missing = LANGS.some((l) => !prev?.[l] && !(prev?.edited ?? []).includes(l));
+      if (skip.has(key)) continue;
       if (all || thChanged || missing) todo[key] = th;
     }
+    const allTodo = Object.keys(todo);
+    for (const k of allTodo.slice(TRANSLATE_BATCH)) delete todo[k];
     const ai = await aiTranslate(todo);
     const rows = Object.entries(todo).map(([key, th]) => {
       const prev = existing.get(key);
@@ -340,7 +347,7 @@ async function handleTranslatePage(p: Record<string, unknown>) {
     });
     await saveTranslationRows(rows);
     await logAdmin("translate_page", { count: rows.length, all });
-    return json({ ok: true, translated: rows.length });
+    return json({ ok: true, translated: rows.length, done: Object.keys(todo), remaining: allTodo.length - rows.length });
   } catch (e) {
     return json({ ok: false, error: String((e as Error)?.message ?? e) });
   }

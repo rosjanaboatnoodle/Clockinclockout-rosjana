@@ -1757,15 +1757,28 @@
 
   let uiEdited = new Set();
 
+  // แปลทีละชุด (ชุดละ 20 ข้อความ) จนครบ หลุดกลางทางกดใหม่ได้ ทำต่อจากที่ค้าง
+  async function translateInBatches(body, statusId){
+    const skip = [];
+    let total = null;
+    for (let round = 0; round < 30; round++){
+      setMsg(statusId, total === null ? "กำลังแปล…" : "กำลังแปล… " + skip.length + "/" + total);
+      const j = await api(Object.assign({}, body, { skip }));
+      if (!j || !j.ok){ setMsg(statusId, errText(j) + (skip.length ? " (แปลไปแล้ว " + skip.length + " ข้อความ กดอีกครั้งเพื่อทำต่อ)" : ""), false); return { ok: false, done: skip.length }; }
+      skip.push(...(j.done || []));
+      if (total === null) total = (j.translated || 0) + (j.remaining || 0);
+      if (!j.remaining || !j.translated) break;
+    }
+    return { ok: true, done: skip.length };
+  }
+
   async function translatePage(all){
     if (all && !confirm("แปลใหม่ทั้งหมด? (ช่องที่แก้เองจะไม่ถูกทับ)")) return;
     const texts = {};
     Object.keys(UI_TH).forEach(k => { texts["ui.clock." + k] = UI_TH[k]; });
-    setMsg("langStatus", "กำลังแปล...");
-    const j = await api({ action: "translate_page", admin_pin: adminPin, texts, all });
-    if (!j || !j.ok){ setMsg("langStatus", errText(j), false); return; }
+    const r = await translateInBatches({ action: "translate_page", admin_pin: adminPin, texts, all }, "langStatus");
     loadUiRows();
-    setMsg("langStatus", "แปลแล้ว " + j.translated + " ข้อความ เช็ค/แก้ได้ด้านล่าง", true);
+    if (r.ok) setMsg("langStatus", r.done ? "แปลแล้ว " + r.done + " ข้อความ เช็ค/แก้ได้ด้านล่าง" : "ทุกข้อความแปลไว้แล้ว", true);
   }
 
   async function loadUiRows(){
