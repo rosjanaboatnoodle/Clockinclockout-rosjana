@@ -99,6 +99,35 @@
   .modal{ width:min(480px,100%); max-height:calc(100vh - 32px); overflow:auto; background:#fff; border-radius:16px; padding:16px; }
   details.pay{ margin-top:6px; }
   details.pay > summary{ cursor:pointer; font-weight:900; font-size:13px; color:#4c1d95; }
+  .billWrap{ overflow:auto; background:#e5e7eb; border-radius:12px; padding:10px; }
+  .bill{ width:560px; max-width:none; margin:0 auto; background:#fff; color:#111827; padding:22px 24px; border-radius:6px;
+    font-family: "Noto Sans Thai", "Noto Sans Myanmar", "Noto Sans Lao", "Noto Sans Khmer", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif; font-size:13.5px; }
+  .bill h2{ margin:0; font-size:20px; text-align:center; }
+  .bill .shop{ text-align:center; font-weight:800; color:#4b5563; }
+  .bill .meta{ display:flex; justify-content:space-between; gap:8px; margin:12px 0 8px; font-weight:700; flex-wrap:wrap; }
+  .bill .status{ font-size:12px; font-weight:800; border-radius:999px; padding:2px 10px; }
+  .bill .status.closed{ background:#d1fae5; color:#065f46; }
+  .bill .status.open{ background:#fef3c7; color:#92400e; }
+  .bill table{ width:100%; border-collapse:collapse; }
+  .bill td, .bill th{ padding:6px 4px; border-bottom:1px solid #f1f5f9; text-align:left; vertical-align:top; }
+  .bill .num{ text-align:right; font-variant-numeric: tabular-nums; white-space:nowrap; }
+  .bill .sub{ font-size:12px; color:#6b7280; font-weight:600; }
+  .bill .sec{ font-weight:900; margin-top:12px; color:#1d2b6a; }
+  .bill tr.sum td{ font-weight:900; border-top:2px solid #e5e7eb; }
+  .bill .net{ margin-top:12px; background:#ecfdf5; border-radius:10px; padding:12px 14px; display:flex; justify-content:space-between; align-items:center; }
+  .bill .net b{ font-size:24px; color:#047857; font-variant-numeric: tabular-nums; }
+  .bill .stats{ display:flex; gap:14px; flex-wrap:wrap; margin-top:10px; font-weight:700; color:#374151; }
+  .bill .daily th, .bill .daily td{ font-size:11.5px; padding:4px 3px; }
+  .bill .sign{ display:flex; gap:30px; margin-top:28px; }
+  .bill .sign div{ flex:1; text-align:center; border-top:1px dashed #9ca3af; padding-top:6px; font-weight:700; color:#4b5563; }
+  .bill .foot{ margin-top:14px; font-size:11px; color:#9ca3af; text-align:right; }
+  @media print{
+    body{ background:#fff !important; }
+    body *{ visibility:hidden; }
+    #billPrint, #billPrint *{ visibility:visible; }
+    #billPrint{ position:absolute; left:0; top:0; }
+    .bill{ border-radius:0; }
+  }
   .viewer{ position:fixed; inset:0; background:rgba(0,0,0,.85); display:none; align-items:center; justify-content:center; z-index:99; padding:16px; }
   .viewer.show{ display:flex; }
   .viewer img{ max-width:100%; max-height:100%; border-radius:12px; }
@@ -209,6 +238,14 @@
     </div>
 
     <!-- เงิน -->
+    <div class="card hidden" data-panel="pay" id="pendingCard">
+      <div class="cardTitle">📄 รอบที่ครบแล้ว รอปิดรอบ</div>
+      <div class="hint">ดูบิลให้เรียบร้อย แล้วกดปิดรอบ ปิดแล้วตัวเลขในบิลจะไม่เปลี่ยน และแก้เวลา/เบิกเงินในรอบนั้นไม่ได้ (ปลดล็อกได้)</div>
+      <div id="pendingList"></div>
+      <div class="row"><button class="btn dark" id="closeAllBtn" onclick="closeAllPending()">🔒 ปิดรอบทั้งหมด</button></div>
+      <div class="status" id="pendingStatus"></div>
+    </div>
+
     <div class="card hidden" data-panel="pay">
       <div class="cardTitle">ยอดเงินรอบนี้ (คำนวณสด)</div>
       <div class="row">
@@ -219,6 +256,11 @@
       <div id="payCards"></div>
       <div class="hint" style="margin-top:6px;">ตัวเลขสีเขียว = คงเหลือที่ต้องจ่าย (ค่าแรง + โอที − เบิกที่อนุมัติแล้ว) · ออกบิล/ปิดรอบ จะมาในขั้นถัดไป</div>
       <div class="status" id="payStatus"></div>
+    </div>
+
+    <div class="card hidden" data-panel="pay">
+      <div class="cardTitle">📚 บิลย้อนหลัง (ปิดรอบแล้ว)</div>
+      <div id="historyList"></div>
     </div>
 
     <div class="card hidden" data-panel="pay">
@@ -357,6 +399,28 @@
   </div>
 </div>
 
+<div class="overlay" id="billModal">
+  <div class="modal" style="width:min(640px,100%);">
+    <div class="row">
+      <div class="cardTitle" style="margin:0; flex:1;">บิลค่าแรง</div>
+      <select class="field sm" style="flex:0 0 130px;" id="billLang" onchange="renderBill()">
+        <option value="th">ไทย</option><option value="en">English</option><option value="my">မြန်မာ</option>
+        <option value="lo">ລາວ</option><option value="km">ខ្មែរ</option><option value="vi">Tiếng Việt</option>
+      </select>
+    </div>
+    <label class="check"><input type="checkbox" id="billDaily" checked onchange="renderBill()"> แสดงรายวัน</label>
+    <div class="billWrap"><div id="billPrint"></div></div>
+    <div class="row" style="margin-top:10px;">
+      <button class="btn green" onclick="billShare()">📤 แชร์ / บันทึกรูป</button>
+      <button class="btn dark" onclick="billPdf()">📄 PDF</button>
+      <button class="btn" onclick="window.print()">🖨️ พิมพ์</button>
+      <button class="btn" id="billCloseBtn" onclick="billClosePeriod()">🔒 ปิดรอบนี้</button>
+      <button class="btn" style="margin-left:auto;" onclick="$('billModal').classList.remove('show')">ปิด</button>
+    </div>
+    <div class="status" id="billStatus"></div>
+  </div>
+</div>
+
 <div class="overlay" id="editor">
   <div class="modal">
     <div class="cardTitle" id="edTitle">แก้กะ</div>
@@ -418,6 +482,7 @@
     bad_break: "เวลาพักไม่ถูกต้อง",
     bad_shift_time: "เวลาเข้า/ออกของกะไม่ถูกต้อง",
     bad_entry: "ข้อมูลตารางกะไม่ถูกต้อง",
+    already_closed: "รอบนี้ปิดไปแล้ว",
     unknown_staff: "ไม่พบพนักงาน",
     not_found: "ไม่พบรายการนี้ (อาจถูกลบไปแล้ว)",
     already_setup: "ระบบตั้งค่าไปแล้ว ใช้รหัสแอดมินเดิมเข้าสู่ระบบ",
@@ -1259,6 +1324,275 @@
     });
   }
 
+
+  // ---------- ปิดรอบ + บิล ----------
+
+  async function loadPending(){
+    const j = await api({ action: "pending_closures", admin_pin: adminPin, branch_id: branchId });
+    const box = $("pendingList"); box.innerHTML = "";
+    const list = (j && j.ok && j.pending) || [];
+    $("pendingCard").style.display = list.length ? "" : "none";
+    $("closeAllBtn").style.display = list.length > 1 ? "" : "none";
+    pendingCache = list;
+    list.forEach(x => {
+      const row = el("div", "reviewItem");
+      const left = el("div");
+      left.appendChild(el("div", "", x.label + (x.active ? "" : " (ไม่ได้ใช้งานแล้ว)")));
+      left.appendChild(el("div", "sub", rangeText(x)));
+      const right = el("div", "row"); right.style.margin = "0";
+      const b1 = el("button", "btn", "📄 ดูบิล"); b1.onclick = () => openBill(x.staff_id, x.start);
+      const b2 = el("button", "btn dark", "🔒 ปิดรอบ"); b2.onclick = () => closePeriod(x.staff_id, x.start, x.label, x.end);
+      right.append(b1, b2);
+      row.append(left, right);
+      box.appendChild(row);
+    });
+  }
+  let pendingCache = [];
+
+  async function closeAllPending(){
+    if (!pendingCache.length || !confirm("ปิดรอบทั้งหมด " + pendingCache.length + " รายการ?\n(แนะนำให้ดูบิลก่อน)")) return;
+    for (const x of pendingCache){
+      const j = await api({ action: "close_period", admin_pin: adminPin, staff_id: x.staff_id, date: x.start });
+      if (!j || (!j.ok && j.error !== "already_closed")){ setMsg("pendingStatus", x.label + ": " + errText(j), false); return; }
+    }
+    setMsg("pendingStatus", "ปิดรอบแล้ว", true);
+    refreshPay();
+  }
+
+  function refreshPay(){ loadPending(); loadHistory(); loadPaySummary(); }
+
+  async function closePeriod(staffId, date, label, end){
+    const notEnded = end && end >= localDateStr(new Date());
+    if (!confirm("ปิดรอบของ " + label + "?" + (notEnded ? "\n\n⚠️ รอบนี้ยังไม่จบ (จบ " + thDate(end) + ") ถ้าปิดตอนนี้ วันที่เหลือจะไม่ถูกนับในบิลนี้" : "") + "\n\nปิดแล้วตัวเลขในบิลจะไม่เปลี่ยน และแก้เวลา/เบิกเงินในรอบนี้ไม่ได้ (ปลดล็อกได้)")) return false;
+    const j = await api({ action: "close_period", admin_pin: adminPin, staff_id: staffId, date });
+    if (!j || !j.ok){ alert(errText(j)); return false; }
+    refreshPay();
+    return true;
+  }
+
+  async function unlockPeriod(closureId, label){
+    if (!confirm("ปลดล็อกรอบของ " + label + "?\nบิลที่บันทึกไว้จะถูกคำนวณใหม่ตามค่าปัจจุบัน")) return;
+    const j = await api({ action: "unlock_period", admin_pin: adminPin, closure_id: closureId });
+    if (!j || !j.ok){ alert(errText(j)); return; }
+    refreshPay();
+  }
+
+  async function loadHistory(){
+    const j = await api({ action: "closures", admin_pin: adminPin, branch_id: branchId });
+    const box = $("historyList"); box.innerHTML = "";
+    const list = (j && j.ok && j.closures) || [];
+    if (!list.length){ box.appendChild(el("div", "hint", "ยังไม่มีรอบที่ปิด")); return; }
+    list.slice(0, 40).forEach(c => {
+      const row = el("div", "reviewItem");
+      const left = el("div");
+      left.appendChild(el("div", "", c.label + " · " + baht(c.net) + " ฿"));
+      left.appendChild(el("div", "sub", rangeText(c) + " · ปิดเมื่อ " + fmt(c.closed_at)));
+      const b = el("button", "btn", "📄 ดูบิล"); b.onclick = () => openBill(c.staff_id, c.start);
+      row.append(left, b);
+      box.appendChild(row);
+    });
+  }
+
+  // ----- หน้าตาบิล -----
+
+  let billData = null, billBranch = "";
+  const billDicts = {};
+
+  async function billDict(lang){
+    if (lang === "th") return {};
+    if (billDicts[lang]) return billDicts[lang];
+    const j = await api({ action: "bootstrap", lang, admin_pin: adminPin });
+    billDicts[lang] = (j && j.ok && j.dict) || {};
+    return billDicts[lang];
+  }
+
+  async function openBill(staffId, date){
+    setMsg("billStatus", "กำลังโหลด…");
+    $("billModal").classList.add("show");
+    $("billPrint").innerHTML = "";
+    const j = await api({ action: "bill", admin_pin: adminPin, staff_id: staffId, date });
+    if (!j || !j.ok){ setMsg("billStatus", errText(j), false); return; }
+    billData = j.bill; billBranch = j.branch_name;
+    billData._date = date;
+    setMsg("billStatus", "");
+    renderBill();
+  }
+
+  const BILL_LOCALE = { th: "th-TH", en: "en-GB", my: "my-MM", lo: "lo-LA", km: "km-KH", vi: "vi-VN" };
+
+  async function renderBill(){
+    if (!billData) return;
+    const lang = $("billLang").value;
+    const dict = await billDict(lang);
+    const T = (k, vars) => {
+      let s = dict["ui.clock." + k] || UI_TH[k] || k;
+      if (vars) Object.keys(vars).forEach(v => { s = s.split("{" + v + "}").join(vars[v]); });
+      return s;
+    };
+    const loc = BILL_LOCALE[lang];
+    const money = n => Number(n || 0).toLocaleString(loc, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    const num = n => Number(n || 0).toLocaleString(loc, { maximumFractionDigits: 2 });
+    const dayTxt = d => { try{ return new Date(d + "T00:00:00").toLocaleDateString(loc, { day: "numeric", month: "short", year: "numeric" }); } catch(e){ return d; } };
+    const short = d => { try{ return new Date(d + "T00:00:00").toLocaleDateString(loc, { day: "numeric", month: "short", weekday: "short" }); } catch(e){ return d; } };
+    const b = billData, t = b.totals;
+    const box = $("billPrint"); box.innerHTML = "";
+    const bill = el("div", "bill");
+    bill.appendChild(el("div", "shop", billBranch));
+    bill.appendChild(el("h2", "", T("billTitle")));
+    const meta = el("div", "meta");
+    const who = el("div");
+    who.appendChild(el("div", "", T("billEmployee") + ": " + b.label));
+    who.appendChild(el("div", "sub", T("billPeriod") + " " + dayTxt(b.period.start) + " – " + dayTxt(b.period.end)));
+    meta.appendChild(who);
+    meta.appendChild(el("span", "status " + (b.locked ? "closed" : "open"), b.locked ? T("billClosed") : T("billOpen")));
+    bill.appendChild(meta);
+
+    const tbl = el("table");
+    const line = (label, sub, amount, cls) => {
+      const tr = el("tr", cls || "");
+      const td = el("td"); td.appendChild(document.createTextNode(label));
+      if (sub){ td.appendChild(el("div", "sub", sub)); }
+      tr.appendChild(td);
+      tr.appendChild(el("td", "num", amount));
+      tbl.appendChild(tr);
+    };
+    const rates = b.rates || {};
+    line(T("billWage"), b.pay_type === "hourly"
+      ? T("billHourlyRate", { r: num(rates.hourly_rate), h: num(t.worked_hours - t.ot_hours) })
+      : T("billDailyRate", { r: num(rates.daily_rate), n: num(t.days_worked) }), money(t.base));
+    if (t.ot_hours) line(T("billOt"), rates.ot_rate ? T("billOtRate", { h: num(t.ot_hours), r: num(rates.ot_rate) }) : num(t.ot_hours) + " " + T("billHrs"), money(t.ot_pay));
+    if (t.late_deduct) line(T("billLate"), T("billLateInfo", { n: t.late_times, m: t.late_min }), "−" + money(t.late_deduct));
+    line(T("billGross"), "", money(t.gross), "sum");
+    bill.appendChild(tbl);
+
+    bill.appendChild(el("div", "sec", T("billAdvances")));
+    const at = el("table");
+    const adv = (b.advances || []).filter(a => a.status === "approved");
+    if (!adv.length){ const tr = el("tr"); tr.appendChild(el("td", "sub", T("billNoAdvances"))); at.appendChild(tr); }
+    adv.forEach(a => {
+      const tr = el("tr");
+      tr.appendChild(el("td", "", short(a.date) + (a.item ? " · " + a.item : "")));
+      tr.appendChild(el("td", "num", "−" + money(a.amount)));
+      at.appendChild(tr);
+    });
+    if (adv.length){ const tr = el("tr", "sum"); tr.appendChild(el("td", "", T("billAdvTotal"))); tr.appendChild(el("td", "num", "−" + money(t.advances))); at.appendChild(tr); }
+    bill.appendChild(at);
+
+    const net = el("div", "net");
+    net.appendChild(el("span", "", T("billNet")));
+    net.appendChild(el("b", "", money(t.net) + " ฿"));
+    bill.appendChild(net);
+
+    const stats = el("div", "stats");
+    [[T("billDaysWorked"), num(t.days_worked) + " " + T("billDays")], [T("billDaysOff"), num(t.days_off) + " " + T("billDays")],
+     [T("billHours"), num(t.worked_hours) + " " + T("billHrs")], [T("billOt"), num(t.ot_hours) + " " + T("billHrs")]]
+      .concat(t.break_hours ? [[T("billBreak"), num(t.break_hours) + " " + T("billHrs")]] : [])
+      .forEach(([k, v]) => stats.appendChild(el("span", "", k + " " + v)));
+    bill.appendChild(stats);
+
+    if ($("billDaily").checked && (b.days || []).length){
+      bill.appendChild(el("div", "sec", T("billDaily")));
+      const dt = el("table", "daily");
+      const head = el("tr");
+      [T("billColDate"), T("billColShift"), T("billColIn"), T("billColOut"), T("billColLate"), T("billColOt"), T("billColPay")]
+        .forEach((h, i) => head.appendChild(el("th", i >= 4 ? "num" : "", h)));
+      dt.appendChild(head);
+      b.days.forEach(d => {
+        const tr = el("tr");
+        tr.appendChild(el("td", "", short(d.date)));
+        tr.appendChild(el("td", "", d.shift ? d.shift.name : "–"));
+        tr.appendChild(el("td", "", d.first_in ? d.first_in.slice(11, 16) : "–"));
+        tr.appendChild(el("td", "", d.last_out ? d.last_out.slice(11, 16) : "–"));
+        tr.appendChild(el("td", "num", d.late_min ? d.late_min + "'" : ""));
+        tr.appendChild(el("td", "num", d.ot_min ? num(d.ot_min / 60) : ""));
+        tr.appendChild(el("td", "num", money(d.base + d.ot_pay - (d.late_deduct || 0))));
+        dt.appendChild(tr);
+      });
+      bill.appendChild(dt);
+    }
+
+    const sign = el("div", "sign");
+    sign.append(el("div", "", T("billPayer")), el("div", "", T("billReceiver")));
+    bill.appendChild(sign);
+    bill.appendChild(el("div", "foot", T("billPrinted") + " " + new Date().toLocaleString(loc, { hour12: false })));
+    box.appendChild(bill);
+    $("billCloseBtn").style.display = b.locked ? "none" : "";
+  }
+
+  // ----- ส่งออก: รูป / PDF -----
+
+  function loadScript(src){
+    return new Promise((ok, bad) => {
+      if (document.querySelector('script[src="' + src + '"]')) return ok();
+      const s = document.createElement("script"); s.src = src; s.onload = ok; s.onerror = bad;
+      document.head.appendChild(s);
+    });
+  }
+
+  async function billCanvas(){
+    await loadScript("https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js");
+    const node = document.querySelector("#billPrint .bill");
+    return window.html2canvas(node, { scale: 2, backgroundColor: "#ffffff", useCORS: true });
+  }
+
+  function billFileName(ext){
+    const b = billData;
+    return ("bill-" + b.label + "-" + b.period.start + "_" + b.period.end + "." + ext).replace(/[\\/:*?"<>|\s]+/g, "-");
+  }
+
+  async function billShare(){
+    if (!billData) return;
+    setMsg("billStatus", "กำลังสร้างรูป…");
+    try{
+      const canvas = await billCanvas();
+      const blob = await new Promise(r => canvas.toBlob(r, "image/png"));
+      const file = new File([blob], billFileName("png"), { type: "image/png" });
+      if (navigator.canShare && navigator.canShare({ files: [file] })){
+        await navigator.share({ files: [file], title: file.name });
+        setMsg("billStatus", "");
+      } else {
+        const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = file.name; a.click();
+        setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+        setMsg("billStatus", "บันทึกรูปแล้ว", true);
+      }
+    } catch(e){
+      if (e && e.name === "AbortError"){ setMsg("billStatus", ""); return; }
+      setMsg("billStatus", "สร้างรูปไม่สำเร็จ ลองกด 🖨️ พิมพ์ แล้วเลือกบันทึกเป็น PDF แทน", false);
+    }
+  }
+
+  async function billPdf(){
+    if (!billData) return;
+    setMsg("billStatus", "กำลังสร้าง PDF…");
+    try{
+      const canvas = await billCanvas();
+      await loadScript("https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js");
+      const { jsPDF } = window.jspdf;
+      const pdf = new jsPDF({ unit: "mm", format: "a4" });
+      const pageW = 210, pageH = 297, margin = 10;
+      const w = pageW - margin * 2;
+      const h = canvas.height * w / canvas.width;
+      const img = canvas.toDataURL("image/jpeg", 0.92);
+      // ยาวเกินหน้าเดียว: แบ่งเป็นหลายหน้า
+      let y = 0;
+      const usable = pageH - margin * 2;
+      while (y < h){
+        if (y > 0) pdf.addPage();
+        pdf.addImage(img, "JPEG", margin, margin - y, w, h);
+        y += usable;
+      }
+      pdf.save(billFileName("pdf"));
+      setMsg("billStatus", "บันทึก PDF แล้ว", true);
+    } catch(e){
+      setMsg("billStatus", "สร้าง PDF ไม่สำเร็จ ลองกด 🖨️ พิมพ์ แล้วเลือกบันทึกเป็น PDF แทน", false);
+    }
+  }
+
+  async function billClosePeriod(){
+    if (!billData) return;
+    if (await closePeriod(billData.staff_id, billData._date, billData.label, billData.period.end)) openBill(billData.staff_id, billData._date);
+  }
+
   // ---------- ยอดเงินรอบนี้ ----------
 
   function baht(n){ return Number(n || 0).toLocaleString("th-TH", { minimumFractionDigits: Number(n) % 1 ? 2 : 0, maximumFractionDigits: 2 }); }
@@ -1282,10 +1616,11 @@
       items.forEach(([k, v]) => { const d = el("div"); d.appendChild(document.createTextNode(k)); d.appendChild(el("b", "", v)); g.appendChild(d); });
       c.append(head, g);
       box.appendChild(c);
+      return c;
     };
     j.people.forEach(p => {
       const t = p.totals;
-      card(p.label + (p.locked ? " 🔒" : ""), (p.pay_type === "hourly" ? "รายชั่วโมง" : "รายวัน") + " · " + rangeText(p.period), t.net, [
+      const c = card(p.label + (p.locked ? " 🔒" : ""), (p.pay_type === "hourly" ? "รายชั่วโมง" : "รายวัน") + " · " + rangeText(p.period), t.net, [
         ["วันทำงาน", String(t.days_worked)], ["หยุด", String(t.days_off)],
         ["ชั่วโมงงาน", String(t.worked_hours)], ["ชม.โอที", String(t.ot_hours)],
         ["ค่าแรง", baht(t.base)], ["โอที", baht(t.ot_pay)],
@@ -1293,6 +1628,17 @@
         ["ชม.พัก", String(t.break_hours || 0)], ["กลับก่อน", (t.early_min || 0) + " น."],
         ["เบิก", (t.advances ? "−" : "") + baht(t.advances)], ["รออนุมัติ", baht(t.pending)]
       ]);
+      const acts = el("div", "row"); acts.style.margin = "8px 0 0";
+      const bb = el("button", "btn", "📄 บิล"); bb.onclick = () => openBill(p.staff_id, p.period.start);
+      acts.appendChild(bb);
+      if (p.closure_id){
+        const ub = el("button", "btn", "🔓 ปลดล็อก"); ub.onclick = () => unlockPeriod(p.closure_id, p.label);
+        acts.appendChild(ub);
+      } else {
+        const cb = el("button", "btn dark", "🔒 ปิดรอบ"); cb.onclick = () => closePeriod(p.staff_id, p.period.start, p.label, p.period.end);
+        acts.appendChild(cb);
+      }
+      c.appendChild(acts);
       Object.keys(tot).forEach(k => { tot[k] += Number(t[k] || 0); });
     });
     if (j.people.length > 1) card("รวมทุกคน", "", tot.net, [["ค่าแรง", baht(tot.base)], ["โอที", baht(tot.ot_pay)], ["เบิก", (tot.advances ? "−" : "") + baht(tot.advances)]], "total");
@@ -1461,7 +1807,7 @@
     document.querySelectorAll(".tab").forEach(b => b.classList.toggle("active", b.dataset.tab === name));
     document.querySelectorAll("[data-panel]").forEach(p => p.classList.toggle("hidden", p.dataset.panel !== name));
     if (name === "lang") loadUiRows();
-    if (name === "pay"){ loadPaySettings(); loadPaySummary(); }
+    if (name === "pay"){ loadPaySettings(); loadPaySummary(); loadPending(); loadHistory(); }
     if (name === "shifts"){ loadPaySettings().then(() => { renderShiftList(); loadRoster(); }); }
     if (name === "adv"){ loadPaySettings(); loadAdvances(); }
   }

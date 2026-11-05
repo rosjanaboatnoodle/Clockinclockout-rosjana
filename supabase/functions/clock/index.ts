@@ -1331,6 +1331,8 @@ function computeDay(
     shift: shift ? { id: shift.id, name: shift.name, start: shift.start_time, end: shift.end_time } : null,
     shift_source: ctx.shiftSource ?? "none",
     late_min: lateMin, early_min: earlyMin, late_deduct: round2(lateDeduct),
+    first_in: firstIn !== null ? utcToLocal(new Date(firstIn).toISOString()) : null,
+    last_out: lastOut !== null ? utcToLocal(new Date(lastOut).toISOString()) : null,
     ot_min: otMin, ot_auto_min: otAuto, ot_rate: round2(otRate),
     base: round2(base), ot_pay: round2(otPay), open: punches.some((s) => !s.check_out && !s.forgot_out),
   };
@@ -1408,9 +1410,21 @@ function staffPeriodHist(b: BranchFull, s: StaffFull): PeriodHist {
 }
 
 // Period totals for one person. `date` picks the period (default today).
-async function staffPeriodSummary(b: BranchFull, s: StaffFull, date?: string) {
+// A closed (billed) period returns what was saved when it was closed, so the bill never changes.
+async function staffPeriodSummary(b: BranchFull, s: StaffFull, date?: string, fresh = false) {
   const d = date && isIsoDate(date) ? date : localDate(new Date());
   const per = periodFor(staffPeriodHist(b, s), d);
+  if (!fresh) {
+    const { data: closed } = await supabase.from("pay_closures").select("id, summary, closed_at")
+      .eq("staff_id", s.id).lte("period_start", d).gte("period_end", d).maybeSingle();
+    if (closed?.summary && Object.keys(closed.summary).length) {
+      return { ...(closed.summary as Record<string, unknown>), locked: true, closure_id: closed.id, closed_at: closed.closed_at } as Awaited<ReturnType<typeof computeSummary>>;
+    }
+  }
+  return computeSummary(b, s, per);
+}
+
+async function computeSummary(b: BranchFull, s: StaffFull, per: { start: string; end: string; cfg: PeriodCfg }) {
   const rules = effectivePay(b.pay_defaults, s.pay);
   const [{ data: punches }, { data: adv }, locked] = await Promise.all([
     supabase.from("punches").select("*").eq("staff_id", s.id).gte("work_date", per.start).lte("work_date", per.end).order("check_in"),
@@ -1435,7 +1449,8 @@ async function staffPeriodSummary(b: BranchFull, s: StaffFull, date?: string) {
   const daysWorked = days.reduce((m, x) => m + x.day, 0);
   return {
     staff_id: s.id, name: s.name, label: s.label || s.name, pay_type: rules.pay_type,
-    period: { start: per.start, end: per.end, cfg: per.cfg }, locked,
+    rates: { daily_rate: rules.daily_rate, hourly_rate: rules.hourly_rate, ot_rate: days.find((x) => x.ot_rate)?.ot_rate ?? null },
+    period: { start: per.start, end: per.end, cfg: per.cfg }, locked, closure_id: null as number | null, closed_at: null as string | null,
     totals: {
       days_worked: daysWorked,
       days_with_punch: days.filter((x) => x.worked_min > 0).length,
@@ -1559,6 +1574,104 @@ async function handlePaySummary(p: Record<string, unknown>) {
   const { data: staff } = await q.order("sort").order("name");
   const people = await Promise.all(((staff ?? []) as StaffFull[]).map((s) => staffPeriodSummary(b, s, String(p.date ?? ""))));
   return json({ ok: true, people });
+}
+
+// ============================================================
+// Closing periods and bills (ปิดรอบ / บิล)
+// ============================================================
+
+async function loadStaffFull(id: number): Promise<StaffFull | null> {
+  const { data } = await supabase.from("staff").select("id, branch_id, name, label, active, pay, period").eq("id", id).maybeSingle();
+  return (data as StaffFull) ?? null;
+}
+
+// Everything a bill shows. `date` = any day inside the period (default today).
+async function handleBill(p: Record<string, unknown>) {
+  { const g = await adminGate(p); if (g) return g; }
+  const s = await loadStaffFull(Number(p.staff_id) || 0);
+  if (!s) return json({ ok: false, error: "unknown_staff" });
+  const b = await loadBranch(s.branch_id);
+  if (!b) return json({ ok: false, error: "unknown_branch" });
+  const bill = await staffPeriodSummary(b, s, String(p.date ?? ""));
+  return json({ ok: true, branch_name: b.name, bill });
+}
+
+// Saves the period's numbers as they are now and locks the period.
+async function handleClosePeriod(p: Record<string, unknown>) {
+  { const g = await adminGate(p); if (g) return g; }
+  const s = await loadStaffFull(Number(p.staff_id) || 0);
+  if (!s) return json({ ok: false, error: "unknown_staff" });
+  const b = await loadBranch(s.branch_id);
+  if (!b) return json({ ok: false, error: "unknown_branch" });
+  const sum = await staffPeriodSummary(b, s, String(p.date ?? ""), true);
+  const { data: already } = await supabase.from("pay_closures").select("id").eq("staff_id", s.id).eq("period_start", sum.period.start).maybeSingle();
+  if (already) return json({ ok: false, error: "already_closed" });
+  const closedAt = new Date().toISOString();
+  const { data, error } = await supabase.from("pay_closures").insert({
+    branch_id: b.id, staff_id: s.id, period_start: sum.period.start, period_end: sum.period.end,
+    summary: { ...sum, locked: true, branch_name: b.name }, closed_at: closedAt,
+  }).select("id").maybeSingle();
+  if (error) {
+    const dup = error.code === "23505" || String(error.message).includes("duplicate");
+    return json({ ok: false, error: dup ? "already_closed" : error.message });
+  }
+  await logAdmin("close_period", { staff_id: s.id, start: sum.period.start, end: sum.period.end, net: sum.totals.net });
+  return json({ ok: true, closure_id: data?.id });
+}
+
+// Opens a closed period again (the saved bill is removed; numbers are recalculated).
+async function handleUnlockPeriod(p: Record<string, unknown>) {
+  { const g = await adminGate(p); if (g) return g; }
+  const { data: c } = await supabase.from("pay_closures").select("id, staff_id, period_start, period_end").eq("id", Number(p.closure_id) || 0).maybeSingle();
+  if (!c) return json({ ok: false, error: "not_found" });
+  await supabase.from("pay_closures").delete().eq("id", c.id);
+  await logAdmin("unlock_period", c);
+  return json({ ok: true });
+}
+
+// People whose previous period has ended but isn't closed yet (and had work or advances in it).
+async function handlePendingClosures(p: Record<string, unknown>) {
+  { const g = await adminGate(p); if (g) return g; }
+  const b = await loadBranch(String(p.branch_id ?? ""));
+  if (!b) return json({ ok: false, error: "unknown_branch" });
+  const { data: staff } = await supabase.from("staff").select("id, branch_id, name, label, active, pay, period").eq("branch_id", b.id).order("sort").order("name");
+  const today = localDate(new Date());
+  const out = [];
+  for (const s of (staff ?? []) as StaffFull[]) {
+    const hist = staffPeriodHist(b, s);
+    const now = periodFor(hist, today);
+    // look back up to 3 periods
+    let end = addDays(now.start, -1);
+    for (let i = 0; i < 3; i++) {
+      const prev = periodFor(hist, end);
+      const [{ data: closed }, { data: work }, { data: adv }] = await Promise.all([
+        supabase.from("pay_closures").select("id").eq("staff_id", s.id).eq("period_start", prev.start).maybeSingle(),
+        supabase.from("punches").select("id").eq("staff_id", s.id).gte("work_date", prev.start).lte("work_date", prev.end).limit(1),
+        supabase.from("advances").select("id").eq("staff_id", s.id).gte("date", prev.start).lte("date", prev.end).limit(1),
+      ]);
+      if (!closed && ((work ?? []).length || (adv ?? []).length)) {
+        out.push({ staff_id: s.id, label: s.label || s.name, active: s.active, start: prev.start, end: prev.end });
+      }
+      end = addDays(prev.start, -1);
+    }
+  }
+  return json({ ok: true, pending: out });
+}
+
+// Bills already closed (history), newest first.
+async function handleClosures(p: Record<string, unknown>) {
+  { const g = await adminGate(p); if (g) return g; }
+  let q = supabase.from("pay_closures").select("id, staff_id, period_start, period_end, closed_at, summary").eq("branch_id", String(p.branch_id ?? ""));
+  if (p.staff_id) q = q.eq("staff_id", Number(p.staff_id));
+  const { data, error } = await q.order("period_start", { ascending: false }).limit(200);
+  if (error) return json({ ok: false, error: error.message });
+  return json({
+    ok: true,
+    closures: (data ?? []).map((c) => ({
+      id: c.id, staff_id: c.staff_id, start: c.period_start, end: c.period_end, closed_at: c.closed_at,
+      label: (c.summary as Record<string, unknown>)?.label ?? "", net: ((c.summary as Record<string, Record<string, unknown>>)?.totals ?? {}).net ?? null,
+    })),
+  });
 }
 
 // ============================================================
@@ -1959,6 +2072,11 @@ const ACTIONS: Record<string, (p: Record<string, unknown>) => Promise<Response>>
   save_staff_pay: handleSaveStaffPay,
   save_period: handleSavePeriod,
   pay_summary: handlePaySummary,
+  bill: handleBill,
+  close_period: handleClosePeriod,
+  unlock_period: handleUnlockPeriod,
+  pending_closures: handlePendingClosures,
+  closures: handleClosures,
   list_shifts: handleListShifts,
   save_shift: handleSaveShift,
   delete_shift: handleDeleteShift,
