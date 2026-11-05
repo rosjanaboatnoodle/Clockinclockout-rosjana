@@ -73,6 +73,8 @@
   .money{ text-align:right; font-variant-numeric: tabular-nums; }
   tr.total td{ font-weight:900; border-top:2px solid #e5e7eb; }
   .fl.wide{ grid-column: 1 / -1; }
+  .wdBox > summary{ cursor:pointer; font-weight:900; color:#4c1d95; padding:4px 0; }
+  .wdBox .sub{ margin:2px 0 6px; }
   .wdRow{ display:grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap:6px; }
   .wdCell{ display:flex; align-items:center; gap:6px; }
   .wdCell .sub{ flex:0 0 30px; font-weight:900; color:#374151; }
@@ -958,8 +960,8 @@
     { k: "ot_min_min", label: "ต้องเกินอย่างน้อยกี่นาทีถึงนับ", show: e => e.ot_mode !== "none" },
     { group: "เวลางาน / กะ" },
     { k: "work_mode", label: "เวลางาน", type: "select", options: [["none", "ไม่กำหนด (นับตามเวลาตอกจริง)"], ["flexible", "ยืดหยุ่น: เข้ากี่โมงก็ได้ ครบ N ชม."], ["shift", "มีกะ (เข้า–ออกตามกะ)"]] },
-    { k: "default_shift_id", label: "กะประจำ", type: "shift", show: e => e.work_mode === "shift" },
-    { k: "weekday_shifts", label: "กะตามวัน (ว่าง = ใช้กะประจำ)", type: "weekdays", show: e => e.work_mode === "shift" },
+    { k: "default_shift_id", label: "กะประจำ (ใช้ทุกวัน)", type: "shift", show: e => e.work_mode === "shift" },
+    { k: "weekday_shifts", label: "ตั้งกะต่างกันบางวัน (ไม่บังคับ)", type: "weekdays", show: e => e.work_mode === "shift" },
     { k: "auto_shift", label: "วันที่ไม่ได้กำหนดกะ ให้ระบบเดากะจากเวลาตอกเข้า", type: "bool", show: e => e.work_mode === "shift" },
     { k: "count_early", label: "มาก่อนเวลากะ นับเป็นเวลางาน", type: "bool", show: e => e.work_mode === "shift" },
     { group: "เวลาพัก" },
@@ -1001,7 +1003,14 @@
       let inp;
       if (f.type === "weekdays"){
         // 7 ช่อง อา.–ส. แต่ละวันเลือกกะ / หยุด / ว่าง (ใช้กะประจำ)
+        // พับไว้: ปกติใช้แค่ "กะประจำ" ช่องนี้สำหรับวันที่ต่างจากปกติเท่านั้น
         lab.classList.add("wide");
+        const title = lab.firstChild;
+        const det = el("details", "wdBox");
+        const sum = el("summary", "", title.textContent);
+        lab.removeChild(title);
+        det.appendChild(sum);
+        det.appendChild(el("div", "sub", "เช่น จ.–ศ. ใช้กะประจำ แต่ ส.–อา. เข้ารอบอื่น หรือหยุดประจำทุกวันพุธ · ปล่อย \"ใช้กะประจำ\" = วันนั้นใช้กะประจำ"));
         const row = el("div", "wdRow");
         const sels = [];
         const ownW = own[f.k] || {};
@@ -1019,7 +1028,9 @@
           cell.appendChild(sel);
           row.appendChild(cell);
         }
-        lab.appendChild(row);
+        det.appendChild(row);
+        if (sels.some(x => x.value)) det.open = true;
+        lab.appendChild(det);
         inputs[f.k] = { weekdays: sels, value: "x" };
         grid.appendChild(lab);
         groups.push([f, lab]);
