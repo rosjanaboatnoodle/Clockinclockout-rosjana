@@ -1,6 +1,6 @@
 // Edge Function "clock" — ระบบตอกบัตร (ใช้ Supabase project เดียวกับปฏิทินได้ หรือใช้เดี่ยวๆ ก็ได้)
 //
-// Database: run supabase/migrations/0001_clock.sql … 0006_access.sql in order.
+// Database: run supabase/migrations/0001_clock.sql … 0007_staff_login.sql in order.
 // Deploy: Supabase Dashboard -> Edge Functions -> create function named "clock" ->
 // paste this file's contents -> Deploy -> แท็บ Settings -> ปิด "Verify JWT with legacy secret"
 //
@@ -131,23 +131,31 @@ function newAccessKey(): string {
   return [...crypto.getRandomValues(new Uint8Array(8))].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
-type KeyBranch = { id: string; name?: string; require_device?: boolean; require_ip?: boolean; allowed_ips?: string[] };
+type KeyBranch = { id: string; name?: string; require_device?: boolean; require_ip?: boolean; allowed_ips?: string[]; staff_login?: boolean };
 
 async function branchFromKey(p: Record<string, unknown>): Promise<KeyBranch | null> {
   const key = String(p.key ?? "").trim();
   if (!/^[a-f0-9]{8,64}$/i.test(key)) return null;
   const q = (cols: string) => supabase.from("branches").select(cols).eq("access_key", key.toLowerCase()).maybeSingle();
-  let { data, error } = await q("id, name, require_device, require_ip, allowed_ips");
-  if (error) ({ data } = await q("id, name")); // 0006_access.sql not run yet: no extra locks
+  // newest columns first; an older database (0006/0007 not run yet) just has fewer locks
+  let { data, error } = await q("id, name, require_device, require_ip, allowed_ips, staff_login");
+  if (error) ({ data, error } = await q("id, name, require_device, require_ip, allowed_ips"));
+  if (error) ({ data } = await q("id, name"));
   return (data as KeyBranch | null) ?? null;
 }
 
-// Staff actions: the branch from the link, after the device lock. Returns an error code instead when refused.
-async function staffBranch(p: Record<string, unknown>): Promise<KeyBranch | string> {
+// Who is looking at a branch page:
+//   staffId null = sees the whole branch (lock off, or the shop's shared tablet)
+//   staffId set  = a personal phone signed in as this person: sees and acts only as them
+type Viewer = { kiosk: boolean; staffId: number | null };
+type StaffBranch = KeyBranch & { viewer: Viewer };
+
+// Staff actions: the branch from the link, after the device and sign-in checks. Returns an error code instead when refused.
+async function staffBranch(p: Record<string, unknown>, touch = false): Promise<StaffBranch | string> {
   const b = await branchFromKey(p);
   if (!b) return "bad_link";
-  const devErr = await deviceError(b, p);
-  return devErr ?? b;
+  const v = await viewerOf(b, p, touch);
+  return typeof v === "string" ? v : { ...b, viewer: v };
 }
 
 // ---------- Device lock (optional, per branch) ----------
@@ -166,29 +174,59 @@ function deviceCode(d: string): string {
   return d.slice(0, 4).toUpperCase();
 }
 
-async function deviceError(b: KeyBranch, p: Record<string, unknown>, touch = false): Promise<string | null> {
+type DeviceRow = { id: number; status: string; kiosk?: boolean; staff_id?: number | null };
+
+async function findDevice(branchId: string, dev: string): Promise<DeviceRow | null | "missing"> {
+  const q = (cols: string) => supabase.from("devices").select(cols).eq("branch_id", branchId).eq("device_id", dev).maybeSingle();
+  let { data, error } = await q("id, status, kiosk, staff_id");
+  if (error) ({ data, error } = await q("id, status")); // 0007 not run yet
+  if (error) return "missing"; // 0006 not run yet: no device features
+  return (data as DeviceRow | null) ?? null;
+}
+
+async function viewerOf(b: KeyBranch, p: Record<string, unknown>, touch = false): Promise<Viewer | string> {
   const dev = cleanDevice(p.device);
-  if (!dev) return b.require_device ? "device_pending" : null;
-  const { data, error } = await supabase.from("devices").select("id, status").eq("branch_id", b.id).eq("device_id", dev).maybeSingle();
-  if (error) return null; // table missing (0006 not run): lock can't be on anyway
-  if (!data) {
-    // lock off: new phones are only recorded when the page opens (bootstrap), not on every call
-    if (!b.require_device && !touch) return null;
-    const { count } = await supabase.from("devices").select("id", { count: "exact", head: true }).eq("branch_id", b.id);
-    if ((count ?? 0) < MAX_DEVICES_PER_BRANCH) {
-      await supabase.from("devices").insert({
-        branch_id: b.id, device_id: dev, user_agent: String(p._ua ?? ""), last_ip: String(p._ip ?? ""),
-      });
+  let row: DeviceRow | null = null;
+  if (dev) {
+    const found = await findDevice(b.id, dev);
+    if (found === "missing") return { kiosk: false, staffId: null };
+    row = found;
+    // new phones are recorded when the page opens, or at once when a lock needs to know them
+    if (!row && (touch || b.require_device || b.staff_login)) {
+      const { count } = await supabase.from("devices").select("id", { count: "exact", head: true }).eq("branch_id", b.id);
+      if ((count ?? 0) < MAX_DEVICES_PER_BRANCH) {
+        await supabase.from("devices").insert({
+          branch_id: b.id, device_id: dev, user_agent: String(p._ua ?? ""), last_ip: String(p._ip ?? ""),
+        });
+        const again = await findDevice(b.id, dev);
+        row = again === "missing" ? null : again;
+      }
+    } else if (row && touch) {
+      await supabase.from("devices").update({ last_seen: new Date().toISOString(), last_ip: String(p._ip ?? ""), user_agent: String(p._ua ?? "") }).eq("id", row.id);
     }
-    return b.require_device ? "device_pending" : null;
   }
-  if (touch) {
-    await supabase.from("devices").update({ last_seen: new Date().toISOString(), last_ip: String(p._ip ?? ""), user_agent: String(p._ua ?? "") }).eq("id", data.id);
+  // a blocked phone stays out even with every lock off
+  if (row?.status === "blocked") return "device_blocked";
+  const kiosk = !!row?.kiosk;
+  if (b.require_device && !kiosk && row?.status !== "approved") return "device_pending";
+  if (!b.staff_login || kiosk) return { kiosk, staffId: null };
+
+  // personal phone: must be signed in as someone who still works here
+  if (!row?.staff_id) return "need_login";
+  const { data: s } = await supabase.from("staff").select("id, branch_id, active, pin_hash").eq("id", row.staff_id).maybeSingle();
+  if (!s || !s.active || !s.pin_hash || s.branch_id !== b.id) {
+    await supabase.from("devices").update({ staff_id: null }).eq("id", row.id);
+    return "need_login";
   }
-  // a blocked phone stays out even with the lock off; "waiting" only matters with the lock on
-  if (data.status === "blocked") return "device_blocked";
-  if (!b.require_device || data.status === "approved") return null;
-  return "device_pending";
+  return { kiosk: false, staffId: s.id };
+}
+
+// "Bank", "bank", "แบงค์" or "แบงค์ Bank" all find แบงค์ Bank
+function nameMatches(input: string, s: { name: string; label: string }): boolean {
+  const v = input.trim().toLowerCase().replace(/\s+/g, " ");
+  if (!v) return false;
+  const words = [s.name, s.label, ...String(s.label ?? "").split(/\s+/)].map((w) => String(w ?? "").trim().toLowerCase()).filter(Boolean);
+  return words.includes(v);
 }
 
 // ---------- Shop internet lock (optional, per branch) ----------
@@ -475,6 +513,8 @@ async function handleBootstrap(p: Record<string, unknown>) {
   const lang = cleanLang(p.lang);
   let only: string | null = null;
   let admin = false;
+  let me: number | null = null;  // signed-in person on a personal phone
+  let kiosk = false;
   if (p.admin_pin) {
     const g = await adminGate(p);
     if (g) return g;
@@ -483,23 +523,26 @@ async function handleBootstrap(p: Record<string, unknown>) {
   } else {
     const b = await branchFromKey(p);
     only = b?.id ?? null;
-    const devErr = b ? await deviceError(b, p, true) : null;
-    if (b && devErr) {
-      // phone not approved yet: show only that, nothing about the branch's people
+    const v = b ? await viewerOf(b, p, true) : null;
+    if (b && typeof v === "string") {
+      // not let in yet: show only that, nothing about the branch's people
       let dict: Record<string, string> = {};
       try { dict = dictFor(await getTranslations(undefined, "ui.clock."), lang); } catch (_) { /* Thai fallback */ }
       return json({
-        ok: true, lang, tz: shopTz(), has_admin: true, branches: [], dict,
-        device: devErr === "device_blocked" ? "blocked" : "pending",
-        device_code: deviceCode(cleanDevice(p.device)), branch_name: b.name ?? "",
+        ok: true, lang, tz: shopTz(), has_admin: true, branches: [], dict, branch_name: b.name ?? "",
+        ...(v === "need_login"
+          ? { need_login: true }
+          : { device: v === "device_blocked" ? "blocked" : "pending", device_code: deviceCode(cleanDevice(p.device)) }),
       });
     }
+    if (v && typeof v !== "string") { me = v.staffId; kiosk = v.kiosk; }
   }
   const cols = "id, name, sort, lat, lng, radius_m, require_gps, require_photo" + (admin ? ", access_key, photo_keep_days" : "");
   let bq = supabase.from("branches").select(cols);
   let sq = supabase.from("staff").select("id, branch_id, name, label, short, sort").eq("active", true);
   // no valid link: ask for a branch id that can never exist (ids are cleaned to a-z0-9_-)
   if (!admin) { bq = bq.eq("id", only ?? "-"); sq = sq.eq("branch_id", only ?? "-"); }
+  if (me) sq = sq.eq("id", me); // a personal phone only sees its owner
   const [{ data: branches, error }, { data: staff }] = await Promise.all([
     bq.order("sort").order("name"),
     sq.order("sort").order("name"),
@@ -517,6 +560,7 @@ async function handleBootstrap(p: Record<string, unknown>) {
     tz: shopTz(),
     has_admin: await hasAdmin(),
     bad_link: !admin && !!p.key && !only,
+    me, kiosk,
     branches: (branches ?? []).map((b: Record<string, unknown>) => ({
       ...b,
       ...(admin ? {} : { access_key: undefined, photo_keep_days: undefined }), // keys only go to the admin
@@ -739,8 +783,9 @@ async function handleToday(p: Record<string, unknown>) {
   if (typeof b === "string") return json({ ok: false, error: b });
   const branchId = b.id;
   const lang = cleanLang(p.lang);
+  const me = b.viewer.staffId;
   const [punches, messages, week] = await Promise.all([
-    todayPunches(branchId),
+    todayPunches(branchId).then((list) => me ? list.filter((r) => r.staff_id === me) : list),
     calendarMessages(branchId, localDate(new Date()), lang),
     calendarWeek(branchId, lang),
   ]);
@@ -805,6 +850,7 @@ async function handlePunch(p: Record<string, unknown>) {
   if (typeof kb === "string") return json({ ok: false, error: kb });
   const branchId = kb.id;
   const staffId = Number(p.staff_id) || 0;
+  if (kb.viewer.staffId && kb.viewer.staffId !== staffId) return json({ ok: false, error: "not_you" });
   const type = ["out", "break_start", "break_end"].includes(String(p.type)) ? String(p.type) : "in";
   const pin = String(p.pin ?? "").trim();
   const lang = cleanLang(p.lang);
@@ -2099,6 +2145,7 @@ async function staffByPin(p: Record<string, unknown>): Promise<{ s: StaffFull; b
     .eq("id", Number(p.staff_id) || 0).maybeSingle();
   const kb = await staffBranch(p);
   if (typeof kb === "string") return kb;
+  if (kb.viewer.staffId && kb.viewer.staffId !== Number(p.staff_id)) return "not_you";
   if (!s || !s.active || s.branch_id !== kb.id) return "unknown_staff";
   const pinErr = await staffPinError(s, pin);
   if (pinErr) return pinErr;
@@ -2153,11 +2200,13 @@ async function handleRequestAdvance(p: Record<string, unknown>) {
 async function handleAccessSettings(p: Record<string, unknown>) {
   { const g = await adminGate(p); if (g) return g; }
   const id = String(p.branch_id ?? "");
-  const { data: b, error } = await supabase.from("branches").select("id, require_device, require_ip, allowed_ips").eq("id", id).maybeSingle();
+  let { data: b, error } = await supabase.from("branches").select("id, require_device, require_ip, allowed_ips, staff_login").eq("id", id).maybeSingle();
+  const has0007 = !error;
+  if (error) ({ data: b, error } = await supabase.from("branches").select("id, require_device, require_ip, allowed_ips").eq("id", id).maybeSingle());
   if (error) return json({ ok: false, error: "need_migration_0006" });
   if (!b) return json({ ok: false, error: "unknown_branch" });
   const [{ data: devices }, { data: log }] = await Promise.all([
-    supabase.from("devices").select("id, device_id, label, status, user_agent, last_ip, last_staff, created_at, last_seen")
+    supabase.from("devices").select("id, device_id, label, status, user_agent, last_ip, last_staff, created_at, last_seen" + (has0007 ? ", kiosk, staff_id" : ""))
       .eq("branch_id", id).order("last_seen", { ascending: false }).limit(MAX_DEVICES_PER_BRANCH),
     supabase.from("admin_log").select("created_at, details").eq("action", "ip_reject")
       .order("created_at", { ascending: false }).limit(200),
@@ -2175,6 +2224,7 @@ async function handleAccessSettings(p: Record<string, unknown>) {
   return json({
     ok: true,
     require_device: b.require_device, require_ip: b.require_ip, allowed_ips: b.allowed_ips ?? [],
+    has_login: has0007, staff_login: !!(b as Record<string, unknown>).staff_login,
     my_ip: ipTag(String(p._ip ?? "")),
     devices: (devices ?? []).map((d) => ({ ...d, code: deviceCode(d.device_id), device_id: undefined })),
     rejected,
@@ -2186,9 +2236,10 @@ async function handleSaveAccess(p: Record<string, unknown>) {
   const id = String(p.branch_id ?? "");
   const ips = [...new Set((Array.isArray(p.allowed_ips) ? p.allowed_ips : []).map((v) => ipTag(String(v))).filter(Boolean))].slice(0, 20);
   if (p.require_ip && !ips.length) return json({ ok: false, error: "ip_needed" });
-  const row = { require_device: !!p.require_device, require_ip: !!p.require_ip, allowed_ips: ips };
+  const row: Record<string, unknown> = { require_device: !!p.require_device, require_ip: !!p.require_ip, allowed_ips: ips };
+  if (p.staff_login !== undefined) row.staff_login = !!p.staff_login;
   const { error } = await supabase.from("branches").update(row).eq("id", id);
-  if (error) return json({ ok: false, error: "need_migration_0006" });
+  if (error) return json({ ok: false, error: p.staff_login ? "need_migration_0007" : "need_migration_0006" });
   let approved = 0;
   if (p.require_device && p.approve_recent) {
     // phones that opened the page in the last 30 days are let in, so nobody is locked out on day one
@@ -2212,10 +2263,54 @@ async function handleDecideDevice(p: Record<string, unknown>) {
     const row: Record<string, unknown> = {};
     if (["approved", "blocked", "pending"].includes(status)) { row.status = status; row.decided_at = new Date().toISOString(); }
     if (p.label !== undefined) row.label = String(p.label).trim().slice(0, 60);
+    if (p.kiosk !== undefined) {
+      row.kiosk = !!p.kiosk;
+      if (p.kiosk) { row.status = "approved"; row.staff_id = null; row.decided_at = new Date().toISOString(); }
+    }
+    if (p.logout) row.staff_id = null;
     const { error } = await supabase.from("devices").update(row).eq("id", id);
     if (error) return json({ ok: false, error: error.message });
   }
   await logAdmin("decide_device", { id, status });
+  return json({ ok: true });
+}
+
+// Staff: sign a personal phone in as yourself (name + PIN). Once per phone.
+async function handleStaffLogin(p: Record<string, unknown>) {
+  const b = await branchFromKey(p);
+  if (!b) return json({ ok: false, error: "bad_link" });
+  const dev = cleanDevice(p.device);
+  if (!dev) return json({ ok: false, error: "bad_device" });
+  const pin = String(p.pin ?? "").trim();
+  if (!/^\d{4,6}$/.test(pin)) return json({ ok: false, error: "pin_invalid" });
+  const { data: staff } = await supabase.from("staff").select("id, name, label, active, pin_hash").eq("branch_id", b.id).eq("active", true);
+  const hits = (staff ?? []).filter((s) => nameMatches(String(p.name ?? ""), s));
+  if (hits.length !== 1) return json({ ok: false, error: hits.length ? "name_ambiguous" : "name_not_found" });
+  const person = hits[0];
+  const pinErr = await staffPinError(person, pin);
+  if (pinErr) return json({ ok: false, error: pinErr });
+  const found = await findDevice(b.id, dev);
+  if (found === "missing") return json({ ok: false, error: "need_migration_0007" });
+  if (found?.status === "blocked") return json({ ok: false, error: "device_blocked" });
+  const label = person.label || person.name;
+  if (found) {
+    const { error } = await supabase.from("devices").update({ staff_id: person.id, login_at: new Date().toISOString(), label }).eq("id", found.id);
+    if (error) return json({ ok: false, error: "need_migration_0007" });
+  } else {
+    const { error } = await supabase.from("devices").insert({
+      branch_id: b.id, device_id: dev, staff_id: person.id, login_at: new Date().toISOString(), label,
+      user_agent: String(p._ua ?? ""), last_ip: String(p._ip ?? ""),
+    });
+    if (error) return json({ ok: false, error: "need_migration_0007" });
+  }
+  return json({ ok: true });
+}
+
+async function handleStaffLogout(p: Record<string, unknown>) {
+  const b = await branchFromKey(p);
+  if (!b) return json({ ok: false, error: "bad_link" });
+  const dev = cleanDevice(p.device);
+  if (dev) await supabase.from("devices").update({ staff_id: null }).eq("branch_id", b.id).eq("device_id", dev);
   return json({ ok: true });
 }
 
@@ -2283,6 +2378,8 @@ const ACTIONS: Record<string, (p: Record<string, unknown>) => Promise<Response>>
   save_access: handleSaveAccess,
   decide_device: handleDecideDevice,
   device_hello: handleDeviceHello,
+  staff_login: handleStaffLogin,
+  staff_logout: handleStaffLogout,
 };
 
 Deno.serve(async (req) => {

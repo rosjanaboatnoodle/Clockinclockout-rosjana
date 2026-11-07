@@ -182,6 +182,16 @@
       <div class="cardHint" id="deviceStatus" style="margin-top:6px;"></div>
     </div>
 
+    <!-- มือถือส่วนตัว: ใส่ชื่อ + PIN ครั้งแรก เครื่องจะจำไว้ -->
+    <div class="card" id="loginBox" style="display:none;">
+      <div class="cardTitle" data-t="loginTitle">👤 เข้าสู่ระบบครั้งแรก</div>
+      <div class="cardHint" data-t="loginHint">ใส่ชื่อของคุณและ PIN ครั้งเดียว เครื่องนี้จะจำไว้</div>
+      <input id="loginName" data-tp="loginNamePh" placeholder="ชื่อของคุณ เช่น Bank" maxlength="60" autocomplete="off" style="width:100%; padding:10px; border-radius:10px; border:2px solid #c7d2fe; font-size:15px; box-sizing:border-box; margin-top:8px;">
+      <input id="loginPin" data-tp="loginPinPh" placeholder="PIN" type="password" inputmode="numeric" maxlength="6" autocomplete="off" style="width:100%; padding:10px; border-radius:10px; border:2px solid #c7d2fe; font-size:15px; box-sizing:border-box; margin-top:8px;">
+      <button onclick="staffLogin()" data-t="loginBtn" style="margin-top:8px; width:100%; border:none; border-radius:10px; padding:11px; font-weight:900; background:#0f172a; color:#fff; font-size:14px;">เข้าสู่ระบบ</button>
+      <div class="cardHint" id="loginStatus" style="margin-top:6px; color:#b91c1c;"></div>
+    </div>
+
     <div id="mainCards">
 
     <div class="card" id="msgCard" style="display:none;">
@@ -208,6 +218,9 @@
       <div class="cardTitle" data-t="historyTitle">ประวัติวันนี้</div>
       <div class="history" id="history"></div>
     </div>
+      <div style="text-align:center; margin:4px 0 8px; display:none;" id="logoutRow">
+        <button class="linkBtn" onclick="staffLogout()" data-t="logoutBtn">ไม่ใช่ฉัน / ออกจากระบบ</button>
+      </div>
     </div><!-- mainCards -->
   </div>
 </div>
@@ -347,14 +360,15 @@
         showBanner(t("badLink"));
         return;
       }
-      if (j.device){
-        // เครื่องนี้ยังไม่ได้รับอนุญาต: ไม่เก็บอะไรของสาขาไว้ในเครื่อง
+      if (j.device || j.need_login){
+        // ยังไม่ได้รับอนุญาต / ยังไม่ได้เข้าสู่ระบบ: ไม่เก็บอะไรของสาขาไว้ในเครื่อง
         lsSet(cacheKey, "");
         applyBoot(j);
         showDeviceBox(j);
         return;
       }
       showDeviceBox(null);
+      document.getElementById("logoutRow").style.display = j.me ? "" : "none";
       applyBoot(j);
       if (KEY) lsSet(cacheKey, JSON.stringify({ branches: j.branches, dict: j.dict, has_admin: j.has_admin, tz: j.tz }));
     } else if (!cached){
@@ -381,15 +395,36 @@
   }
 
   function showDeviceBox(j){
-    document.getElementById("deviceBox").style.display = j ? "" : "none";
+    document.getElementById("deviceBox").style.display = (j && j.device) ? "" : "none";
+    document.getElementById("loginBox").style.display = (j && j.need_login) ? "" : "none";
     document.getElementById("mainCards").style.display = j ? "none" : "";
     if (!j) return;
     showBanner("");
     document.getElementById("branchName").textContent = j.branch_name || "";
+    if (!j.device) return;
     const blocked = j.device === "blocked";
     document.getElementById("deviceTitle").textContent = blocked ? t("deviceBlockedTitle") : t("devicePendingTitle");
     document.getElementById("deviceText").textContent = blocked ? t("deviceBlockedText") : t("devicePendingText", { code: j.device_code || "" });
     document.getElementById("deviceAsk").style.display = blocked ? "none" : "";
+  }
+
+  async function staffLogin(){
+    const name = document.getElementById("loginName").value.trim();
+    const pin = document.getElementById("loginPin").value.trim();
+    const st = document.getElementById("loginStatus");
+    if (!name){ st.textContent = t("nameNotFound"); return; }
+    st.textContent = "";
+    const j = await api({ action: "staff_login", key: KEY, name, pin, lang });
+    if (!j || !j.ok){ st.textContent = errorText(j); return; }
+    document.getElementById("loginPin").value = "";
+    await bootstrap();
+    loadToday();
+  }
+
+  async function staffLogout(){
+    if (!confirm(t("logoutAsk"))) return;
+    await api({ action: "staff_logout", key: KEY });
+    await bootstrap();
   }
 
   async function sendDeviceName(){
@@ -485,7 +520,7 @@
       messages = j.messages || [];
       week = j.week === undefined ? null : j.week;
       renderAll();
-    } else if (j && (j.error === "device_pending" || j.error === "device_blocked")){
+    } else if (j && (j.error === "device_pending" || j.error === "device_blocked" || j.error === "need_login")){
       bootstrap(); // แอดมินเพิ่งเปิดล็อกเครื่อง หรือบล็อกเครื่องนี้
     }
   }
@@ -682,7 +717,9 @@
     wrong_pin: "wrongPin", pin_invalid: "pinInvalid", no_pin: "noPin", already_in: "alreadyIn", not_in: "notIn",
     gps_required: "gpsRequired", photo_required: "photoRequired", bad_photo: "photoFail", photo_too_large: "photoFail",
     too_many_tries: "tooManyTries", bad_link: "badLink", ip_not_allowed: "ipNotAllowed",
-    device_pending: "devicePendingTitle", device_blocked: "deviceBlockedTitle"
+    device_pending: "devicePendingTitle", device_blocked: "deviceBlockedTitle",
+    need_login: "loginTitle", not_you: "notYou", name_not_found: "nameNotFound", name_ambiguous: "nameAmbiguous",
+    unknown_staff: "nameNotFound"
   };
 
   function errorText(j){

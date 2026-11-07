@@ -379,7 +379,10 @@
       <div class="cardTitle">🔒 ล็อกเพิ่ม (ไม่บังคับ)</div>
       <div class="hint">ปิดไว้ = ใช้เหมือนเดิม ใครมีลิงก์ก็เปิดได้ (แต่ต้องรู้ PIN ถึงจะตอกบัตรได้)</div>
 
-      <label class="check"><input type="checkbox" id="reqDevice"> ล็อกกับเครื่อง: เครื่องใหม่ต้องให้แอดมินอนุญาตก่อน</label>
+      <label class="check"><input type="checkbox" id="reqLogin"> มือถือส่วนตัว: ใส่ชื่อ + PIN ครั้งแรกก่อนถึงจะเห็นหน้า</label>
+      <div class="hint">มือถือแต่ละเครื่องเห็นแค่ของเจ้าของ · คนที่ออก (เอาติ๊ก "ใช้งานอยู่" ออก) เด้งออกจากทุกเครื่องทันที · แท็บเล็ตที่ทุกคนใช้ร่วมกัน ให้กด "🖥️ ตั้งเป็นเครื่องกลางร้าน" ในรายการเครื่องด้านล่าง เครื่องนั้นจะเห็นชื่อทุกคนเหมือนเดิม</div>
+
+      <label class="check" style="margin-top:10px;"><input type="checkbox" id="reqDevice"> ล็อกกับเครื่อง: เครื่องใหม่ต้องให้แอดมินอนุญาตก่อน</label>
       <div class="hint">ลิงก์หลุดไปก็เปิดไม่ได้ · เปลี่ยนมือถือ / ล้างข้อมูลเว็บ / เพิ่มไอคอนหน้าจอโฮม (iPhone) = นับเป็นเครื่องใหม่ ต้องอนุญาตอีกครั้ง</div>
 
       <label class="check" style="margin-top:10px;"><input type="checkbox" id="reqIp"> ตอกบัตรได้เฉพาะตอนต่อ WiFi ของร้าน</label>
@@ -641,6 +644,9 @@
     }
     access = j;
     $("reqDevice").checked = !!j.require_device;
+    $("reqLogin").checked = !!j.staff_login;
+    $("reqLogin").disabled = !j.has_login;
+    if (!j.has_login) setMsg("accessStatus", "ตัวเลือก \"มือถือส่วนตัว\" และ \"เครื่องกลางร้าน\" ต้องรันไฟล์ 0007_staff_login.sql ใน Supabase ก่อน");
     $("reqIp").checked = !!j.require_ip;
     renderAccess();
   }
@@ -688,9 +694,15 @@
       const head = el("div", "row");
       const badge = d.status === "approved" ? el("span", "badge ok", "อนุญาตแล้ว") : d.status === "blocked" ? el("span", "badge no", "บล็อก") : el("span", "badge", "รออนุญาต");
       if (d.status === "pending") badge.style.cssText = "background:#fef3c7; color:#92400e;";
+      if (d.status === "pending" && !a.require_device) badge.style.display = "none"; // ไม่ได้ล็อกเครื่อง: ไม่ต้องอนุญาต
+      if (d.kiosk && d.status !== "blocked"){ badge.textContent = "🖥️ เครื่องกลางร้าน"; badge.className = "badge ok"; badge.style.cssText = "background:#e0e7ff; color:#3730a3;"; }
       head.appendChild(badge);
       head.appendChild(el("b", "", "รหัส " + d.code));
-      head.appendChild(el("span", "sub", deviceKind(d.user_agent)));
+      head.appendChild(el("span", "sub", deviceKind(d.user_agent) + (myDeviceCode() === d.code ? " · เครื่องนี้" : "")));
+      if (d.staff_id){
+        const owner = staffAll.find(x => x.id === d.staff_id);
+        head.appendChild(el("span", "badge ok", "👤 " + (owner ? (owner.label || owner.name) : "พนักงาน")));
+      }
       card.appendChild(head);
       card.appendChild(el("div", "hint", "เปิดล่าสุด " + fmt(d.last_seen) + (d.last_staff ? " · ตอกบัตรล่าสุด: " + d.last_staff : "")));
       const row = el("div", "row");
@@ -707,6 +719,16 @@
         acts.appendChild(b);
       };
       if (d.status !== "approved") add("✅ อนุญาต", "green", "approved");
+      if (access.has_login && d.status !== "blocked"){
+        const kb = el("button", "btn", d.kiosk ? "เลิกเป็นเครื่องกลาง" : "🖥️ ตั้งเป็นเครื่องกลางร้าน");
+        kb.onclick = () => { if (d.kiosk || confirm("ตั้งเครื่องรหัส " + d.code + " เป็นเครื่องกลางร้าน?\nเครื่องนี้จะเห็นชื่อทุกคน แต่ละคนใส่ PIN ตัวเองตอนตอกบัตร")) decideDevice(d.id, null, name.value, { kiosk: !d.kiosk }); };
+        acts.appendChild(kb);
+      }
+      if (d.staff_id){
+        const lo = el("button", "btn", "ให้ออกจากระบบ");
+        lo.onclick = () => { if (confirm("ให้เครื่องรหัส " + d.code + " ออกจากระบบ?\nต้องใส่ชื่อ + PIN ใหม่")) decideDevice(d.id, null, name.value, { logout: true }); };
+        acts.appendChild(lo);
+      }
       if (d.status !== "blocked") add("⛔ บล็อก", "", "blocked", "บล็อกเครื่องรหัส " + d.code + "?\nเครื่องนี้จะเปิดหน้าตอกบัตรไม่ได้ทันที (ถึงจะไม่ได้ติ๊กล็อกกับเครื่องก็ตาม)");
       add("ลบ", "", "delete", "ลบเครื่องรหัส " + d.code + " ออกจากรายการ?\nถ้าเปิดลิงก์อีก จะขึ้นเป็นเครื่องใหม่รออนุญาต");
       card.appendChild(acts);
@@ -727,7 +749,9 @@
 
   async function saveAccess(){
     if (!access) return;
-    const reqDevice = $("reqDevice").checked, reqIp = $("reqIp").checked;
+    const reqDevice = $("reqDevice").checked, reqIp = $("reqIp").checked, reqLogin = $("reqLogin").checked;
+    if (reqLogin && !access.staff_login && !access.devices.some(d => d.kiosk) &&
+        !confirm("ยังไม่มีเครื่องกลางร้าน\nถ้าร้านใช้แท็บเล็ตให้ทุกคนตอกบัตร ให้กด \"ยกเลิก\" แล้วกด \"🖥️ ตั้งเป็นเครื่องกลางร้าน\" ที่เครื่องนั้นก่อน ไม่งั้นแท็บเล็ตจะต้องใส่ชื่อ + PIN\n\nตกลง = เปิดเลย")) return;
     if (reqIp && !access.allowed_ips.length){ setMsg("accessStatus", "ต่อ WiFi ร้านแล้วกด \"เพิ่มเน็ตที่ใช้อยู่ตอนนี้\" ก่อน", false); return; }
     let approveRecent = false;
     if (reqDevice && !access.require_device){
@@ -735,14 +759,21 @@
       approveRecent = n > 0 && confirm("อนุญาตเครื่องที่ใช้อยู่ตอนนี้ทั้งหมด (" + n + " เครื่อง ที่เปิดใน 30 วันล่าสุด) เลยไหม?\n\nตกลง = อนุญาตเลย พนักงานใช้ต่อได้ทันที\nยกเลิก = ต้องกดอนุญาตทีละเครื่อง");
     }
     const j = await api({ action: "save_access", admin_pin: adminPin, branch_id: branchId,
-      require_device: reqDevice, require_ip: reqIp, allowed_ips: access.allowed_ips, approve_recent: approveRecent });
+      require_device: reqDevice, require_ip: reqIp, allowed_ips: access.allowed_ips, approve_recent: approveRecent,
+      ...(access.has_login ? { staff_login: reqLogin } : {}) });
+    if (j && j.error === "need_migration_0007"){ setMsg("accessStatus", "ต้องรันไฟล์ 0007_staff_login.sql ใน Supabase ก่อน", false); return; }
     if (!j || !j.ok){ setMsg("accessStatus", j && j.error === "ip_needed" ? "ต่อ WiFi ร้านแล้วกด \"เพิ่มเน็ตที่ใช้อยู่ตอนนี้\" ก่อน" : errText(j), false); return; }
     await loadAccess();
     setMsg("accessStatus", "บันทึกแล้ว" + (j.approved ? " · อนุญาต " + j.approved + " เครื่อง" : ""), true);
   }
 
-  async function decideDevice(id, status, label){
-    const p = { action: "decide_device", admin_pin: adminPin, id, label };
+  // รหัสเครื่องของเบราว์เซอร์นี้ (ถ้าเคยเปิดหน้าตอกบัตรในเบราว์เซอร์เดียวกัน)
+  function myDeviceCode(){
+    try{ const d = localStorage.getItem("clock_device") || ""; return d ? d.slice(0, 4).toUpperCase() : ""; } catch(e){ return ""; }
+  }
+
+  async function decideDevice(id, status, label, extra){
+    const p = Object.assign({ action: "decide_device", admin_pin: adminPin, id, label }, extra || {});
     if (status) p.status = status;
     const j = await api(p);
     if (!j || !j.ok){ setMsg("deviceStatus", errText(j), false); return; }
