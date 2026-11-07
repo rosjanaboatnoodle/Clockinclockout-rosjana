@@ -39,6 +39,8 @@
   .tabs{ display:flex; gap:6px; flex-wrap:wrap; margin-bottom:12px; }
   .tab{ border:none; border-radius:999px; padding:9px 14px; font-weight:900; font-size:13px; background:rgba(255,255,255,.25); color:#fff; cursor:pointer; }
   .tab.active{ background:#fff; color:#0f172a; }
+  .goneBox{ margin-top:10px; }
+  .goneBox > summary{ cursor:pointer; font-weight:900; color:#6b7280; padding:8px 0; }
   .staffCard{ border:1px solid #e5e7eb; border-radius:12px; padding:10px; margin-bottom:8px; }
   .staffCard.off{ opacity:.55; }
   .badge{ font-size:11px; font-weight:900; border-radius:999px; padding:2px 8px; }
@@ -327,6 +329,7 @@
     <!-- พนักงาน -->
     <div class="card hidden" data-panel="staff">
       <div class="cardTitle">พนักงานในสาขานี้</div>
+      <div class="hint">คนที่ออก: เอาติ๊ก "ใช้งานอยู่" ออกแล้วกดบันทึก จะย้ายไปกล่อง "คนที่ออกแล้ว" ด้านล่าง หายจากหน้าตอกบัตร แต่ประวัติ/บิลเก่ายังอยู่</div>
       <div class="hint">ชื่อ = ชื่อสั้นภาษาอังกฤษที่ใช้ในข้อความ/ตารางเวร (เช่น Kla) · ชื่อที่แสดง = ชื่อบนปุ่ม (เช่น กล้า Kla) · PIN 4–6 หลัก (เว้นว่าง = ไม่เปลี่ยน, ใส่ - = ลบ)</div>
       <div id="staffList"></div>
       <div class="row"><button class="btn" onclick="addStaffCard()">+ เพิ่มพนักงาน</button></div>
@@ -854,7 +857,15 @@
     staffAll = (j && j.ok) ? j.staff : [];
     const box = $("staffList");
     box.innerHTML = "";
-    staffAll.forEach(s => box.appendChild(staffCard(s)));
+    staffAll.filter(s => s.active).forEach(s => box.appendChild(staffCard(s)));
+    // คนที่ออกแล้ว: เก็บไว้ในกล่องพับ ประวัติและบิลเก่ายังอยู่ครบ ติ๊ก "ใช้งานอยู่" กลับได้
+    const gone = staffAll.filter(s => !s.active);
+    if (gone.length){
+      const d = el("details", "goneBox"); d.id = "goneBox";
+      d.appendChild(el("summary", "", "👋 คนที่ออกแล้ว (" + gone.length + ") · ประวัติและบิลเก่ายังอยู่ครบ"));
+      gone.forEach(s => d.appendChild(staffCard(s)));
+      box.appendChild(d);
+    }
   }
 
   function staffCard(s){
@@ -889,7 +900,8 @@
   }
 
   function addStaffCard(){
-    $("staffList").appendChild(staffCard(null));
+    const box = $("staffList");
+    box.insertBefore(staffCard(null), $("goneBox")); // คนใหม่อยู่ก่อนกล่องคนที่ออกแล้ว
   }
 
   // ---------- การตอกบัตร ----------
