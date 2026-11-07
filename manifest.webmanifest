@@ -1,7 +1,6 @@
 {
   "name": "ตอกบัตรเข้า-ออกงาน",
   "short_name": "ตอกบัตร",
-  "start_url": "./",
   "scope": "./",
   "display": "standalone",
   "background_color": "#5b73ff",

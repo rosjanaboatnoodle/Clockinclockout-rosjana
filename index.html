@@ -164,6 +164,11 @@
     </div>
     <div class="branchName" id="branchName"></div>
     <div class="banner warn" id="banner" style="display:none;"></div>
+    <!-- ไม่มีรหัสสาขา (เช่น เปิดจากไอคอนที่เพิ่มไว้ก่อนแก้) วางลิงก์จากแอดมินได้เลย -->
+    <div class="banner" id="linkBox" style="display:none;">
+      <input id="linkInput" data-tp="pasteLinkPh" placeholder="วางลิงก์ตอกบัตรที่ได้จากแอดมิน" style="width:100%; padding:10px; border-radius:10px; border:2px solid #c7d2fe; font-size:14px; box-sizing:border-box;">
+      <button onclick="useLink()" data-t="useLink" style="margin-top:8px; width:100%; border:none; border-radius:10px; padding:11px; font-weight:900; background:#0f172a; color:#fff; font-size:14px;">ใช้ลิงก์นี้</button>
+    </div>
 
     <div class="card" id="msgCard" style="display:none;">
       <div class="cardTitle" data-t="todayTitle">📌 วันนี้</div>
@@ -311,6 +316,8 @@
     if (j && j.ok){
       if (j.bad_link){
         // แอดมินเปลี่ยนลิงก์แล้ว: ลืมรหัสเก่าและข้อมูลที่เก็บไว้
+        // จำรหัสเก่าที่ใช้ไม่ได้ ไอคอนเดิมยังเปิดด้วยรหัสนี้ จะได้ใช้รหัสใหม่ที่วางไว้แทน
+        lsSet("clock_bad_key", KEY);
         lsSet("clock_key", ""); lsSet(cacheKey, "");
         KEY = "";
         applyBoot(j);
@@ -339,6 +346,25 @@
     const b = document.getElementById("banner");
     b.textContent = text;
     b.style.display = text ? "" : "none";
+    document.getElementById("linkBox").style.display = KEY ? "none" : "";
+  }
+
+  // รับลิงก์เต็ม (…index.html?b=xxxx) หรือรหัสสาขาเปล่าๆ
+  async function useLink(){
+    const v = document.getElementById("linkInput").value.trim();
+    let k = "";
+    const m = v.match(/[?&]b=([a-f0-9]{8,64})/i);
+    if (m) k = m[1];
+    else if (/^[a-f0-9]{8,64}$/i.test(v)) k = v;
+    if (!k){ showBanner(t("badLinkFormat")); return; }
+    KEY = k.toLowerCase();
+    lsSet("clock_key", KEY);
+    // ใส่รหัสในลิงก์ของหน้า เผื่อกดเพิ่มลงหน้าจอโฮมอีกครั้ง ไอคอนจะจำสาขาไว้
+    const url = new URL(location.href);
+    url.searchParams.set("b", KEY);
+    history.replaceState(null, "", url);
+    await bootstrap();
+    loadToday();
   }
 
   function applyUiText(){
@@ -913,8 +939,14 @@
 
   (async function init(){
     const fromUrl = new URLSearchParams(location.search).get("b");
-    if (fromUrl && /^[a-f0-9]{8,64}$/i.test(fromUrl)){ KEY = fromUrl.toLowerCase(); lsSet("clock_key", KEY); }
-    else KEY = lsGet("clock_key") || "";
+    const goodUrlKey = fromUrl && /^[a-f0-9]{8,64}$/i.test(fromUrl)
+      && !(fromUrl.toLowerCase() === lsGet("clock_bad_key") && lsGet("clock_key"));
+    if (goodUrlKey){ KEY = fromUrl.toLowerCase(); lsSet("clock_key", KEY); }
+    else {
+      KEY = lsGet("clock_key") || "";
+      // มีรหัสที่จำไว้ ใส่กลับเข้าไปในลิงก์ของหน้า ให้กดเพิ่มลงหน้าจอโฮมแล้วได้สาขาเดิม
+      if (KEY){ const u = new URL(location.href); u.searchParams.set("b", KEY); history.replaceState(null, "", u); }
+    }
     const saved = lsGet("clock_lang");
     lang = LOCALE[saved] ? saved : "th";
     applyUiText();
