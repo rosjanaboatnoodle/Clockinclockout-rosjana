@@ -167,13 +167,13 @@ function deviceCode(d: string): string {
 }
 
 async function deviceError(b: KeyBranch, p: Record<string, unknown>, touch = false): Promise<string | null> {
-  // lock off: phones are only recorded when the page opens (bootstrap), not on every call
-  if (!b.require_device && !touch) return null;
   const dev = cleanDevice(p.device);
   if (!dev) return b.require_device ? "device_pending" : null;
   const { data, error } = await supabase.from("devices").select("id, status").eq("branch_id", b.id).eq("device_id", dev).maybeSingle();
   if (error) return null; // table missing (0006 not run): lock can't be on anyway
   if (!data) {
+    // lock off: new phones are only recorded when the page opens (bootstrap), not on every call
+    if (!b.require_device && !touch) return null;
     const { count } = await supabase.from("devices").select("id", { count: "exact", head: true }).eq("branch_id", b.id);
     if ((count ?? 0) < MAX_DEVICES_PER_BRANCH) {
       await supabase.from("devices").insert({
@@ -185,8 +185,10 @@ async function deviceError(b: KeyBranch, p: Record<string, unknown>, touch = fal
   if (touch) {
     await supabase.from("devices").update({ last_seen: new Date().toISOString(), last_ip: String(p._ip ?? ""), user_agent: String(p._ua ?? "") }).eq("id", data.id);
   }
+  // a blocked phone stays out even with the lock off; "waiting" only matters with the lock on
+  if (data.status === "blocked") return "device_blocked";
   if (!b.require_device || data.status === "approved") return null;
-  return data.status === "blocked" ? "device_blocked" : "device_pending";
+  return "device_pending";
 }
 
 // ---------- Shop internet lock (optional, per branch) ----------
