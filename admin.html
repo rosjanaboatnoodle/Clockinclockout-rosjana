@@ -68,9 +68,10 @@
   .payHead{ display:flex; justify-content:space-between; align-items:baseline; gap:8px; flex-wrap:wrap; }
   .payName{ font-weight:900; font-size:15px; color:#0f172a; }
   .payNet{ font-weight:900; font-size:18px; color:#047857; font-variant-numeric: tabular-nums; }
-  .payGrid{ display:grid; grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); gap:4px 10px; margin-top:6px; }
-  .payGrid div{ font-size:12.5px; color:#6b7280; font-weight:700; display:flex; justify-content:space-between; gap:6px; }
-  .payGrid b{ color:#111827; font-variant-numeric: tabular-nums; }
+  /* ชื่อช่องอยู่บน ตัวเลขอยู่ล่าง ในกล่องเดียวกัน จะได้ไม่อ่านตัวเลขผิดช่อง */
+  .payGrid{ display:grid; grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)); gap:6px; margin-top:8px; }
+  .payGrid div{ font-size:12px; color:#6b7280; font-weight:700; display:flex; flex-direction:column; gap:2px; background:#f8fafc; border:1px solid #eef2f7; border-radius:8px; padding:6px 8px; }
+  .payGrid b{ color:#111827; font-size:15px; font-variant-numeric: tabular-nums; }
   .payCard.total{ background:#f8fafc; }
   .money{ text-align:right; font-variant-numeric: tabular-nums; }
   tr.total td{ font-weight:900; border-top:2px solid #e5e7eb; }
@@ -1796,7 +1797,7 @@
     j.people.forEach(p => {
       const t = p.totals;
       const c = card(p.label + (p.locked ? " 🔒" : ""), (p.pay_type === "hourly" ? "รายชั่วโมง" : "รายวัน") + " · " + rangeText(p.period), t.net, [
-        ["วันทำงาน", String(t.days_worked)], ["หยุด", String(t.days_off)],
+        ["วันทำงาน", String(t.days_worked)], ["วันที่ไม่ได้มา", String(t.days_off)],
         ["ชั่วโมงงาน", String(t.worked_hours)], ["ชม.โอที", String(t.ot_hours)],
         ["ค่าแรง", baht(t.base)], ["โอที", baht(t.ot_pay)],
         ["มาสาย", t.late_times ? t.late_times + " ครั้ง / " + t.late_min + " น." : "0"], ["หักสาย", (t.late_deduct ? "−" : "") + baht(t.late_deduct)],
