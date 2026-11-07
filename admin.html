@@ -374,6 +374,49 @@
       <div class="status" id="brStatus"></div>
     </div>
 
+    <!-- แจ้งเตือน -->
+    <div class="card hidden" data-panel="branches">
+      <div class="cardTitle">🔔 แจ้งเตือน</div>
+
+      <div class="cardTitle" style="margin-top:6px; font-size:14px;">เครื่องนี้ (แอดมิน)</div>
+      <div class="hint">iPhone/iPad: เพิ่มหน้าแอดมินลงหน้าจอโฮม แล้วเปิดจากไอคอนก่อน ถึงจะเปิดแจ้งเตือนได้</div>
+      <div class="row">
+        <select class="field" id="pushScope"><option value="">รับของทุกสาขา</option><option value="this">รับเฉพาะสาขาที่เลือกอยู่</option></select>
+        <button class="btn dark" id="pushAdminBtn" onclick="toggleAdminPush()">🔔 เปิดแจ้งเตือนบนเครื่องนี้</button>
+        <button class="btn" onclick="testPush()">ทดสอบ</button>
+      </div>
+      <div class="status" id="pushStatus"></div>
+
+      <div class="cardTitle" style="margin-top:12px; font-size:14px;">ส่งอะไรบ้าง (สาขานี้)</div>
+      <div class="hint">พนักงาน: เปิดเองที่หน้าตอกบัตร → กดชื่อ → ใส่ PIN → 💵 ดูยอดของฉัน → 🔔 เปิดแจ้งเตือน (บนมือถือตัวเองเท่านั้น เครื่องกลางร้านเปิดไม่ได้)</div>
+      <label class="check"><input type="checkbox" id="nRemind"> พนักงาน: เตือนก่อนเข้ากะ</label>
+      <div class="row"><span class="hint" style="margin:0;">ก่อนกี่นาที</span><input class="field sm" id="nRemindMin" type="number" min="0" max="180"></div>
+      <label class="check"><input type="checkbox" id="nForgot"> พนักงาน: ลืมตอกออก</label>
+      <div class="row"><span class="hint" style="margin:0;">หลังเลิกกะกี่นาที</span><input class="field sm" id="nForgotMin" type="number" min="0" max="720"></div>
+      <label class="check"><input type="checkbox" id="nAdv"> พนักงาน: ผลการขอเบิก (อนุมัติ/ไม่อนุมัติ)</label>
+      <label class="check"><input type="checkbox" id="nDuty"> พนักงาน: พรุ่งนี้มีเวร (จากปฏิทิน)</label>
+      <div class="row"><span class="hint" style="margin:0;">ส่งตั้งแต่กี่โมง</span><input class="field sm" id="nDutyHour" type="number" min="0" max="23"></div>
+      <label class="check"><input type="checkbox" id="nAdmAdv"> แอดมิน: มีคนขอเบิกเงิน</label>
+      <label class="check"><input type="checkbox" id="nAdmDev"> แอดมิน: มีเครื่องใหม่รออนุญาต (ตอนเปิดล็อกกับเครื่อง)</label>
+      <label class="check"><input type="checkbox" id="nAdmLate"> แอดมิน: มาสาย / ยังไม่มาตามกะ</label>
+      <div class="row"><span class="hint" style="margin:0;">ยังไม่มาหลังเริ่มกะกี่นาที</span><input class="field sm" id="nAbsentMin" type="number" min="0" max="720"></div>
+      <div class="hint">เตือนก่อนเข้ากะ / มาสาย / ยังไม่มา ใช้กับคนที่มีกะ (แท็บกะ) · วันที่ปฏิทินมี "วันหยุด" จะไม่เตือน</div>
+      <div class="row"><button class="btn dark" onclick="saveNotify()">บันทึกการแจ้งเตือน</button></div>
+      <div class="status" id="notifyStatus"></div>
+
+      <div class="cardTitle" style="margin-top:12px; font-size:14px;">⏱️ ตัวจับเวลา</div>
+      <div class="hint" id="cronInfo"></div>
+      <details id="cronBox">
+        <summary class="hint" style="cursor:pointer; font-weight:900;">วิธีตั้ง (ทำครั้งเดียว)</summary>
+        <div class="hint">เตือนก่อนเข้ากะ / ลืมตอกออก / มาสาย / เวรพรุ่งนี้ ต้องมีตัวจับเวลาเช็คทุก 5 นาที: กด "คัดลอก" → Supabase → SQL Editor → วาง → Run (ถ้ามีคนรู้คำสั่งนี้ ก็แค่สั่งเช็คก่อนเวลา ไม่มีผลอื่น)</div>
+        <textarea class="field" id="cronSql" readonly rows="8" style="width:100%; font-family:monospace; font-size:12px;"></textarea>
+        <div class="row"><button class="btn dark" onclick="copyCron()">คัดลอก</button></div>
+      </details>
+
+      <div class="cardTitle" style="margin-top:12px; font-size:14px;">เครื่องที่รับแจ้งเตือน</div>
+      <div id="pushList"></div>
+    </div>
+
     <!-- ล็อกเพิ่ม (ไม่บังคับ) -->
     <div class="card hidden" data-panel="branches">
       <div class="cardTitle">🔒 ล็อกเพิ่ม (ไม่บังคับ)</div>
@@ -626,7 +669,112 @@
     $("branchLink").value = b ? staffLink(b) : "";
     setMsg("linkStatus", "");
     // รายชื่อพนักงานต้องมาก่อน ส่วนอื่นใช้ชื่อจากรายชื่อนี้
-    loadStaff().then(() => { loadPunches(); loadReview(); loadPaySettings(); loadAccess(); });
+    loadStaff().then(() => { loadPunches(); loadReview(); loadPaySettings(); loadAccess(); loadNotify(); });
+  }
+
+  // ---------- แจ้งเตือน ----------
+  let notifyData = null;
+  const NFIELDS = [["nRemind", "remind"], ["nForgot", "forgot"], ["nAdv", "advance_result"], ["nDuty", "duty"],
+    ["nAdmAdv", "admin_advance"], ["nAdmDev", "admin_device"], ["nAdmLate", "admin_late"]];
+  const NNUMS = [["nRemindMin", "remind_min"], ["nForgotMin", "forgot_after_min"], ["nDutyHour", "duty_hour"], ["nAbsentMin", "absent_after_min"]];
+
+  async function loadNotify(){
+    const want = branchId;
+    const j = await api({ action: "notify_settings", admin_pin: adminPin, branch_id: branchId });
+    if (want !== branchId) return;
+    if (!j || !j.ok){ notifyData = null; setMsg("notifyStatus", j && j.error === "need_migration_0008" ? "ต้องรันไฟล์ 0008_push.sql ใน Supabase ก่อน" : errText(j), false); return; }
+    notifyData = j;
+    NFIELDS.forEach(([id, k]) => { $(id).checked = !!j.notify[k]; });
+    NNUMS.forEach(([id, k]) => { $(id).value = j.notify[k]; });
+    $("cronSql").value = "select cron.schedule('clock-notify', '*/5 * * * *', $$\n  select net.http_post(\n    url := '" + API + "',\n    headers := '{\"Content-Type\": \"application/json\"}'::jsonb,\n    body := '{\"action\": \"cron_tick\", \"secret\": \"" + j.cron_secret + "\"}'::jsonb\n  );\n$$);";
+    const last = j.cron_last ? Date.parse(j.cron_last) : 0;
+    const okCron = last && Date.now() - last < 20 * 60000;
+    $("cronInfo").textContent = okCron ? "✅ ตัวจับเวลาทำงานอยู่ (ล่าสุด " + fmt(j.cron_last) + ")"
+      : (last ? "⚠️ ตัวจับเวลาไม่ได้ทำงานมาสักพัก (ล่าสุด " + fmt(j.cron_last) + ")" : "⚠️ ยังไม่ได้ตั้งตัวจับเวลา: เตือนก่อนเข้ากะ / ลืมตอกออก / มาสาย / เวรพรุ่งนี้ จะยังไม่ส่ง");
+    $("cronBox").open = !okCron;
+    renderPushList();
+    refreshAdminPushBtn();
+  }
+
+  function renderPushList(){
+    const box = $("pushList"); box.innerHTML = "";
+    if (!notifyData.subs.length){ box.appendChild(el("div", "hint", "ยังไม่มีเครื่องเปิดรับแจ้งเตือน")); return; }
+    notifyData.subs.slice().sort((a, b) => (a.role === b.role ? 0 : a.role === "admin" ? -1 : 1)).forEach(x => {
+      const r = el("div", "row");
+      const who = x.role === "admin" ? "🛡️ แอดมิน" + (x.branch_id ? " (" + ((branches.find(b => b.id === x.branch_id) || {}).name || x.branch_id) + ")" : " (ทุกสาขา)") : "👤 " + (x.staff || "พนักงาน");
+      r.appendChild(el("span", "sub", who + " · " + deviceKind(x.user_agent) + (x.last_ok ? " · ส่งล่าสุด " + fmt(x.last_ok) : "")));
+      const del = el("button", "btn", "ลบ");
+      del.onclick = async () => { if (!confirm("หยุดส่งแจ้งเตือนไปเครื่องนี้?")) return; await api({ action: "push_delete", admin_pin: adminPin, id: x.id }); loadNotify(); };
+      r.appendChild(del);
+      box.appendChild(r);
+    });
+  }
+
+  async function saveNotify(){
+    const notify = {};
+    NFIELDS.forEach(([id, k]) => { notify[k] = $(id).checked; });
+    NNUMS.forEach(([id, k]) => { notify[k] = Number($(id).value); });
+    const j = await api({ action: "save_notify", admin_pin: adminPin, branch_id: branchId, notify });
+    if (!j || !j.ok){ setMsg("notifyStatus", j && j.error === "need_migration_0008" ? "ต้องรันไฟล์ 0008_push.sql ใน Supabase ก่อน" : errText(j), false); return; }
+    await loadNotify();
+    setMsg("notifyStatus", "บันทึกแล้ว", true);
+  }
+
+  async function copyCron(){
+    try{ await navigator.clipboard.writeText($("cronSql").value); setMsg("notifyStatus", "คัดลอกแล้ว ไปวางใน Supabase → SQL Editor → Run", true); }
+    catch(e){ $("cronSql").select(); setMsg("notifyStatus", "กดค้างในช่องแล้วเลือกคัดลอก"); }
+  }
+
+  function adminPushSupport(){
+    const ios = /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+    const standalone = window.matchMedia("(display-mode: standalone)").matches || navigator.standalone === true;
+    if (ios && !standalone) return "iPhone/iPad: เพิ่มหน้าแอดมินลงหน้าจอโฮม แล้วเปิดจากไอคอนก่อน";
+    if (!("serviceWorker" in navigator) || !("PushManager" in window) || !("Notification" in window)) return "เบราว์เซอร์นี้ไม่รองรับแจ้งเตือน";
+    return "";
+  }
+  async function adminSub(){
+    try{ const reg = await navigator.serviceWorker.getRegistration(); return reg ? await reg.pushManager.getSubscription() : null; } catch(e){ return null; }
+  }
+  let adminPushOn = false;
+  async function refreshAdminPushBtn(){
+    const bad = adminPushSupport();
+    if (bad){ $("pushAdminBtn").disabled = true; setMsg("pushStatus", bad); return; }
+    const sub = await adminSub();
+    let on = false;
+    if (sub){ const j = await api({ action: "push_status", endpoint: sub.endpoint }); on = !!(j && j.sub && j.sub.role === "admin"); }
+    adminPushOn = on;
+    $("pushAdminBtn").textContent = on ? "🔕 ปิดแจ้งเตือนบนเครื่องนี้" : "🔔 เปิดแจ้งเตือนบนเครื่องนี้";
+  }
+  async function toggleAdminPush(){
+    try{
+      if (adminPushOn){
+        const sub = await adminSub();
+        if (sub){ await api({ action: "push_unsubscribe", endpoint: sub.endpoint }); await sub.unsubscribe(); }
+        setMsg("pushStatus", "ปิดแจ้งเตือนบนเครื่องนี้แล้ว", true);
+      } else {
+        const perm = await Notification.requestPermission();
+        if (perm !== "granted"){ setMsg("pushStatus", "เครื่องไม่อนุญาตแจ้งเตือน ไปเปิดในตั้งค่า → การแจ้งเตือน", false); return; }
+        const k = await api({ action: "push_key" });
+        if (!k || !k.ok){ setMsg("pushStatus", errText(k), false); return; }
+        const reg = await navigator.serviceWorker.register("sw.js");
+        await navigator.serviceWorker.ready;
+        let sub = await reg.pushManager.getSubscription();
+        if (!sub){
+          let s = k.public_key.replace(/-/g, "+").replace(/_/g, "/"); while (s.length % 4) s += "=";
+          sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: Uint8Array.from(atob(s), c => c.charCodeAt(0)) });
+        }
+        const j = await api({ action: "push_subscribe_admin", admin_pin: adminPin, branch_id: $("pushScope").value === "this" ? branchId : "", sub: sub.toJSON() });
+        if (!j || !j.ok){ setMsg("pushStatus", j && j.error === "need_migration_0008" ? "ต้องรันไฟล์ 0008_push.sql ใน Supabase ก่อน" : errText(j), false); return; }
+        setMsg("pushStatus", "เปิดแล้ว กด \"ทดสอบ\" เพื่อลองส่ง", true);
+      }
+    } catch(e){ setMsg("pushStatus", "เปิดไม่สำเร็จ: " + e.message, false); }
+    await loadNotify();
+  }
+  async function testPush(){
+    const sub = await adminSub();
+    const j = await api({ action: "push_test", admin_pin: adminPin, endpoint: sub ? sub.endpoint : "" });
+    if (!j || !j.ok){ setMsg("pushStatus", errText(j), false); return; }
+    setMsg("pushStatus", j.total ? (j.sent ? "ส่งแล้ว ดูแจ้งเตือนบนเครื่อง" : "ส่งไม่สำเร็จ ลองปิดแล้วเปิดใหม่") : "เครื่องนี้ยังไม่ได้เปิดแจ้งเตือน", !!j.sent);
   }
 
   // ---------- ล็อกเพิ่ม: เครื่อง + เน็ตร้าน ----------
@@ -2030,7 +2178,7 @@
     if (name === "pay"){ loadPaySettings(); loadPaySummary(); loadPending(); loadHistory(); }
     if (name === "shifts"){ loadPaySettings().then(() => { renderShiftList(); loadRoster(); }); }
     if (name === "adv"){ loadPaySettings(); loadAdvances(); }
-    if (name === "branches") loadAccess();
+    if (name === "branches"){ loadAccess(); loadNotify(); }
   }
 
   $("loginPin").addEventListener("keydown", e => { if (e.key === "Enter") doLogin(); });

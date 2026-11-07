@@ -1,6 +1,6 @@
 // Edge Function "clock" — ระบบตอกบัตร (ใช้ Supabase project เดียวกับปฏิทินได้ หรือใช้เดี่ยวๆ ก็ได้)
 //
-// Database: run supabase/migrations/0001_clock.sql … 0007_staff_login.sql in order.
+// Database: run supabase/migrations/0001_clock.sql … 0008_push.sql in order.
 // Deploy: Supabase Dashboard -> Edge Functions -> create function named "clock" ->
 // paste this file's contents -> Deploy -> แท็บ Settings -> ปิด "Verify JWT with legacy secret"
 //
@@ -198,6 +198,7 @@ async function viewerOf(b: KeyBranch, p: Record<string, unknown>, touch = false)
         await supabase.from("devices").insert({
           branch_id: b.id, device_id: dev, user_agent: String(p._ua ?? ""), last_ip: String(p._ip ?? ""),
         });
+        if (b.require_device) await notifyNewDevice(b, deviceCode(dev), String(p._ua ?? ""));
         const again = await findDevice(b.id, dev);
         row = again === "missing" ? null : again;
       }
@@ -1984,6 +1985,7 @@ async function handleDecideAdvance(p: Record<string, unknown>) {
   const { error } = await supabase.from("advances").update({ status, decided_at: new Date().toISOString() }).eq("id", a.id);
   if (error) return json({ ok: false, error: error.message });
   await logAdmin("decide_advance", { id: a.id, status });
+  await notifyAdvanceDecided(a, status);
   return json({ ok: true });
 }
 
@@ -2190,7 +2192,411 @@ async function handleRequestAdvance(p: Record<string, unknown>) {
     status: auto ? "approved" : "pending", created_by: "staff", decided_at: auto ? new Date().toISOString() : null,
   });
   if (error) return json({ ok: false, error: error.message });
+  if (!auto) await notifyAdvanceRequest(who.b.id, who.s.label || who.s.name, amount, String(p.item ?? "").trim().slice(0, 100));
   return json({ ok: true, status: auto ? "approved" : "pending" });
+}
+
+// ============================================================
+// Notifications (Web Push, RFC 8291 + VAPID) — no extra keys to set up:
+// the server's key pair is made on first use and kept in app_settings.
+// ============================================================
+
+const te = new TextEncoder();
+function b64uEnc(buf: ArrayBuffer | Uint8Array): string {
+  const b = buf instanceof Uint8Array ? buf : new Uint8Array(buf);
+  let s = "";
+  for (const x of b) s += String.fromCharCode(x);
+  return btoa(s).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+function b64uDec(v: string): Uint8Array {
+  let s = v.replace(/-/g, "+").replace(/_/g, "/");
+  while (s.length % 4) s += "=";
+  return Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
+}
+function concatBytes(...parts: Uint8Array[]): Uint8Array {
+  const out = new Uint8Array(parts.reduce((n, x) => n + x.length, 0));
+  let o = 0;
+  for (const x of parts) { out.set(x, o); o += x.length; }
+  return out;
+}
+async function hmac256(key: Uint8Array, data: Uint8Array): Promise<Uint8Array> {
+  const k = await crypto.subtle.importKey("raw", key, { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+  return new Uint8Array(await crypto.subtle.sign("HMAC", k, data));
+}
+
+type Vapid = { publicKey: string; privateJwk: JsonWebKey };
+let vapidCache: Vapid | null = null;
+async function getVapid(): Promise<Vapid> {
+  if (vapidCache) return vapidCache;
+  const saved = await getSetting<Vapid | null>("vapid", null);
+  if (saved?.publicKey) return (vapidCache = saved);
+  const kp = await crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, true, ["sign", "verify"]) as CryptoKeyPair;
+  const v: Vapid = {
+    publicKey: b64uEnc(await crypto.subtle.exportKey("raw", kp.publicKey)),
+    privateJwk: await crypto.subtle.exportKey("jwk", kp.privateKey),
+  };
+  await setSetting("vapid", v);
+  return (vapidCache = v);
+}
+
+async function vapidHeader(endpoint: string): Promise<string> {
+  const v = await getVapid();
+  const sub = await getSetting<string>("push_origin", "") || "mailto:noreply@example.com";
+  const head = b64uEnc(te.encode(JSON.stringify({ typ: "JWT", alg: "ES256" })));
+  const claims = b64uEnc(te.encode(JSON.stringify({ aud: new URL(endpoint).origin, exp: Math.floor(Date.now() / 1000) + 12 * 3600, sub })));
+  const key = await crypto.subtle.importKey("jwk", v.privateJwk, { name: "ECDSA", namedCurve: "P-256" }, false, ["sign"]);
+  const sig = await crypto.subtle.sign({ name: "ECDSA", hash: "SHA-256" }, key, te.encode(`${head}.${claims}`));
+  return `vapid t=${head}.${claims}.${b64uEnc(sig)}, k=${v.publicKey}`;
+}
+
+// Encrypt one message for one browser (aes128gcm, a single record).
+async function encryptPush(payload: string, p256dh: string, auth: string): Promise<Uint8Array> {
+  const ua = b64uDec(p256dh);
+  const uaKey = await crypto.subtle.importKey("raw", ua, { name: "ECDH", namedCurve: "P-256" }, false, []);
+  const eph = await crypto.subtle.generateKey({ name: "ECDH", namedCurve: "P-256" }, true, ["deriveBits"]) as CryptoKeyPair;
+  const asPub = new Uint8Array(await crypto.subtle.exportKey("raw", eph.publicKey));
+  const secret = new Uint8Array(await crypto.subtle.deriveBits({ name: "ECDH", public: uaKey }, eph.privateKey, 256));
+  const prkKey = await hmac256(b64uDec(auth), secret);
+  const ikm = await hmac256(prkKey, concatBytes(te.encode("WebPush: info\0"), ua, asPub, new Uint8Array([1])));
+  const salt = crypto.getRandomValues(new Uint8Array(16));
+  const prk = await hmac256(salt, ikm);
+  const cek = (await hmac256(prk, concatBytes(te.encode("Content-Encoding: aes128gcm\0"), new Uint8Array([1])))).slice(0, 16);
+  const nonce = (await hmac256(prk, concatBytes(te.encode("Content-Encoding: nonce\0"), new Uint8Array([1])))).slice(0, 12);
+  const key = await crypto.subtle.importKey("raw", cek, "AES-GCM", false, ["encrypt"]);
+  const ct = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv: nonce }, key, concatBytes(te.encode(payload), new Uint8Array([2]))));
+  const head = new Uint8Array(21 + asPub.length);
+  head.set(salt, 0);
+  new DataView(head.buffer).setUint32(16, 4096);
+  head[20] = asPub.length;
+  head.set(asPub, 21);
+  return concatBytes(head, ct);
+}
+
+type PushSub = { id: number; endpoint: string; p256dh: string; auth: string; role: string; staff_id: number | null; branch_id: string | null; lang: string };
+type PushMsg = { title: string; body: string; tag?: string; url?: string };
+
+// true = delivered. Phones that uninstalled / turned notifications off are removed.
+async function sendPush(sub: PushSub, msg: PushMsg): Promise<boolean> {
+  try {
+    const body = await encryptPush(JSON.stringify(msg), sub.p256dh, sub.auth);
+    const r = await fetchWithTimeout(sub.endpoint, {
+      method: "POST",
+      headers: {
+        Authorization: await vapidHeader(sub.endpoint), "Content-Encoding": "aes128gcm",
+        "Content-Type": "application/octet-stream", TTL: "86400", Urgency: "high",
+      },
+      body,
+    }, 8000);
+    if (r.status === 404 || r.status === 410) { await supabase.from("push_subs").delete().eq("id", sub.id); return false; }
+    if (!r.ok) { console.error("push failed", r.status, await r.text().catch(() => "")); return false; }
+    await supabase.from("push_subs").update({ last_ok: new Date().toISOString() }).eq("id", sub.id);
+    return true;
+  } catch (e) {
+    console.error("push error", e);
+    return false;
+  }
+}
+
+async function loadSubs(): Promise<PushSub[]> {
+  const { data, error } = await supabase.from("push_subs").select("id, endpoint, p256dh, auth, role, staff_id, branch_id, lang");
+  return error ? [] : (data ?? []) as PushSub[];
+}
+
+// Staff texts follow each phone's language (ui.clock.* in translations, Thai fallback here).
+const NT_TH: Record<string, string> = {
+  ntRemind: "⏰ ใกล้เวลาเข้างาน",
+  ntRemindBody: "กะ {shift} เริ่ม {time} อย่าลืมตอกบัตรเข้างาน",
+  ntForgot: "🚪 ยังไม่ได้ตอกบัตรออก",
+  ntForgotBody: "เลยเวลาเลิกงานแล้ว ถ้าเลิกงานแล้วอย่าลืมตอกบัตรออก",
+  ntAdvOk: "💵 อนุมัติเบิกเงินแล้ว",
+  ntAdvNo: "💵 คำขอเบิกไม่ได้รับอนุมัติ",
+  ntAdvBody: "{amount} บาท {item}",
+  ntDuty: "🧹 พรุ่งนี้มีเวรของคุณ",
+};
+const ntCache = new Map<string, Record<string, string>>();
+async function ntText(lang: string, key: string, vars: Record<string, string> = {}): Promise<string> {
+  if (!ntCache.has(lang)) {
+    const rows = await getTranslations(Object.keys(NT_TH).map((k) => "ui.clock." + k)).catch(() => []);
+    const d: Record<string, string> = {};
+    for (const r of rows) {
+      const k = r.key.slice("ui.clock.".length);
+      d[k] = (r as Record<string, string>)[lang] || r.th;
+    }
+    ntCache.set(lang, d);
+  }
+  let t = ntCache.get(lang)![key] || NT_TH[key] || key;
+  for (const [k, v] of Object.entries(vars)) t = t.split(`{${k}}`).join(v);
+  return t.trim();
+}
+
+async function pushStaff(staffId: number, build: (lang: string) => Promise<PushMsg>, subs?: PushSub[]) {
+  const list = (subs ?? await loadSubs()).filter((x) => x.role === "staff" && x.staff_id === staffId);
+  let n = 0;
+  for (const sub of list) {
+    const msg = await build(sub.lang);
+    if (msg.title && await sendPush(sub, { url: "./index.html", ...msg })) n++;
+  }
+  return n;
+}
+
+async function pushAdmins(branchId: string, msg: PushMsg, subs?: PushSub[]) {
+  const list = (subs ?? await loadSubs()).filter((x) => x.role === "admin" && (!x.branch_id || x.branch_id === branchId));
+  let n = 0;
+  for (const sub of list) if (await sendPush(sub, { url: "./admin.html", ...msg })) n++;
+  return n;
+}
+
+// Send once per key (e.g. "forgot:123"). false = already sent.
+async function onceKey(key: string): Promise<boolean> {
+  const { data } = await supabase.from("push_log").select("key").eq("key", key).maybeSingle();
+  if (data) return false;
+  const { error } = await supabase.from("push_log").insert({ key });
+  return !error;
+}
+
+const NOTIFY_DEFAULTS = {
+  remind: true, remind_min: 15,            // staff: before the shift starts
+  forgot: true, forgot_after_min: 60,      // staff: still clocked in this long after the shift ends
+  advance_result: true,                    // staff: request approved / rejected
+  duty: true, duty_hour: 18,               // staff: calendar duty tomorrow, sent from this hour
+  admin_advance: true,                     // admin: someone asked for an advance
+  admin_device: true,                      // admin: a new phone waits (device lock on)
+  admin_late: true, absent_after_min: 15,  // admin: late, or not in this long after the shift start
+};
+type NotifyCfg = typeof NOTIFY_DEFAULTS;
+function notifyCfg(raw: unknown): NotifyCfg {
+  const out: Record<string, unknown> = { ...NOTIFY_DEFAULTS };
+  const r = (raw && typeof raw === "object") ? raw as Record<string, unknown> : {};
+  for (const [k, def] of Object.entries(NOTIFY_DEFAULTS)) {
+    if (!(k in r)) continue;
+    if (typeof def === "boolean") out[k] = !!r[k];
+    else { const n = Math.round(Number(r[k])); if (Number.isFinite(n)) out[k] = Math.min(k === "duty_hour" ? 23 : 720, Math.max(0, n)); }
+  }
+  return out as NotifyCfg;
+}
+async function branchNotify(branchId: string): Promise<NotifyCfg> {
+  const { data, error } = await supabase.from("branches").select("notify").eq("id", branchId).maybeSingle();
+  return notifyCfg(error ? {} : data?.notify);
+}
+
+const fmtBahtTh = (n: number) => Number(n).toLocaleString("th-TH", { maximumFractionDigits: 2 });
+const hhmm = (ts: number) => (utcToLocal(new Date(ts).toISOString()) ?? "").slice(11, 16);
+
+// ---------- events ----------
+
+async function notifyAdvanceDecided(a: { staff_id: number; branch_id: string; amount: number; item: string; created_by: string }, status: string) {
+  if (a.created_by !== "staff") return;
+  if (!(await branchNotify(a.branch_id)).advance_result) return;
+  await pushStaff(a.staff_id, async (lang) => ({
+    title: await ntText(lang, status === "approved" ? "ntAdvOk" : "ntAdvNo"),
+    body: await ntText(lang, "ntAdvBody", { amount: fmtBahtTh(a.amount), item: a.item ? "· " + a.item : "" }),
+    tag: "advance",
+  }));
+}
+
+async function notifyAdvanceRequest(branchId: string, who: string, amount: number, item: string) {
+  if (!(await branchNotify(branchId)).admin_advance) return;
+  await pushAdmins(branchId, { title: "💵 มีคนขอเบิกเงิน", body: `${who} ขอเบิก ${fmtBahtTh(amount)} บาท${item ? " · " + item : ""}`, tag: "adv" });
+}
+
+async function notifyNewDevice(b: KeyBranch, code: string, ua: string) {
+  if (!(await branchNotify(b.id)).admin_device) return;
+  const kind = /iPhone/.test(ua) ? "iPhone" : /iPad/.test(ua) ? "iPad" : /Android/.test(ua) ? "Android" : "เครื่องใหม่";
+  await pushAdmins(b.id, { title: "📱 มีเครื่องใหม่รออนุญาต", body: `${b.name ?? b.id} · รหัส ${code} (${kind})`, tag: "device" });
+}
+
+// ---------- every few minutes (Supabase cron calls action "cron_tick") ----------
+
+async function handleCronTick(p: Record<string, unknown>) {
+  const secret = await getSetting<string>("cron_secret", "");
+  if (!secret || String(p.secret ?? "") !== secret) return json({ ok: false, error: "bad_secret" });
+  await setSetting("cron_last", new Date().toISOString());
+  const subs = await loadSubs();
+  if (!subs.length) return json({ ok: true, sent: 0 });
+  const now = Date.now();
+  const today = localDate(new Date());
+  const tomorrow = addDays(today, 1);
+  const hour = Number((utcToLocal(new Date().toISOString()) ?? "").slice(11, 13));
+  let sent = 0;
+
+  const { data: branches } = await supabase.from("branches").select("id, name, pay_defaults, notify");
+  for (const b of branches ?? []) {
+    const cfg = notifyCfg(b.notify);
+    const staffSubs = new Set(subs.filter((x) => x.role === "staff").map((x) => x.staff_id));
+    const hasAdmin = subs.some((x) => x.role === "admin" && (!x.branch_id || x.branch_id === b.id));
+    const { data: staff } = await supabase.from("staff").select("id, name, label, pay").eq("branch_id", b.id).eq("active", true);
+    const people = (staff ?? []) as Array<{ id: number; name: string; label: string; pay: Record<string, unknown> }>;
+    const mine = people.filter((s) => staffSubs.has(s.id));
+    if (!mine.length && !hasAdmin) continue;
+
+    const punches = await todayPunches(b.id) as Array<Punch & { shift_override?: number | null }>;
+    const sc = await loadShiftContext(b.id, people.map((s) => s.id), addDays(today, -1), today, []);
+    const { data: hol } = await supabase.from("schedule_entries").select("topic_id").eq("branch_id", b.id).eq("date", today).eq("topic_id", "holiday");
+    const holiday = !!hol?.length;
+    const shiftOf = (s: { id: number; pay: Record<string, unknown> }, date: string, firstIn: number | null, override?: number | null) => {
+      const rules = effectivePay(b.pay_defaults, s.pay);
+      const k = `${s.id}|${date}`;
+      return { rules, r: resolveShift(rules, sc.shifts, sc.rosterMap.has(k) ? sc.rosterMap.get(k) : undefined, date, firstIn, override) };
+    };
+
+    for (const s of people) {
+      const todays = punches.filter((x) => x.staff_id === s.id && x.work_date === today);
+      const firstIn = todays.length ? Math.min(...todays.map((x) => Date.parse(x.check_in))) : null;
+      const override = todays.find((x) => x.shift_override !== null && x.shift_override !== undefined)?.shift_override;
+      const { rules, r } = shiftOf(s, today, firstIn, override);
+      if (!r.shift || holiday) continue;
+      const win = shiftWindow(r.shift, today);
+      const name = s.label || s.name;
+      // staff: shift starts soon and not in yet
+      if (cfg.remind && staffSubs.has(s.id) && firstIn === null && now >= win.start - cfg.remind_min * 60000 && now < win.start &&
+          await onceKey(`remind:${s.id}:${today}`)) {
+        sent += await pushStaff(s.id, async (lang) => ({
+          title: await ntText(lang, "ntRemind"),
+          body: await ntText(lang, "ntRemindBody", { shift: r.shift!.name, time: r.shift!.start_time.slice(0, 5) }),
+          tag: "remind",
+        }), subs);
+      }
+      if (!cfg.admin_late || !hasAdmin) continue;
+      // admin: not in yet, some time after the start
+      if (firstIn === null && now >= win.start + cfg.absent_after_min * 60000 && now < win.end && await onceKey(`absent:${s.id}:${today}`)) {
+        sent += await pushAdmins(b.id, { title: "⚠️ ยังไม่มาทำงาน", body: `${name} · กะ ${r.shift.name} เริ่ม ${r.shift.start_time.slice(0, 5)}`, tag: "late" }, subs);
+      }
+      // admin: came in late (same grace as the late rule)
+      const lateMin = firstIn !== null ? Math.round((firstIn - win.start) / 60000) : 0;
+      if (firstIn !== null && lateMin > rules.late_after_min && lateMin <= AUTO_SHIFT_WINDOW_MIN && await onceKey(`late:${s.id}:${today}`)) {
+        sent += await pushAdmins(b.id, { title: "⚠️ มาสาย", body: `${name} เข้างาน ${hhmm(firstIn)} สาย ${lateMin} นาที (กะ ${r.shift.start_time.slice(0, 5)})`, tag: "late" }, subs);
+      }
+    }
+
+    // staff: still clocked in long after the shift (or a normal day) should have ended
+    if (cfg.forgot) {
+      for (const pu of punches.filter((x) => !x.check_out && !x.forgot_out && staffSubs.has(x.staff_id))) {
+        const s = people.find((x) => x.id === pu.staff_id);
+        if (!s) continue;
+        const inAt = Date.parse(pu.check_in);
+        const { rules, r } = shiftOf(s, pu.work_date, inAt, pu.shift_override);
+        const end = r.shift ? shiftWindow(r.shift, pu.work_date).end : inAt + (rules.std_hours + 1) * 3600000;
+        if (now >= end + cfg.forgot_after_min * 60000 && await onceKey(`forgot:${pu.id}`)) {
+          sent += await pushStaff(s.id, async (lang) => ({ title: await ntText(lang, "ntForgot"), body: await ntText(lang, "ntForgotBody"), tag: "forgot" }), subs);
+        }
+      }
+    }
+
+    // staff: calendar duty tomorrow, once, from the set hour
+    if (cfg.duty && mine.length && hour >= cfg.duty_hour) {
+      const byLang = new Map<string, Awaited<ReturnType<typeof calendarRange>>>();
+      for (const s of mine) {
+        if (!(await onceKey(`duty:${s.id}:${tomorrow}`))) continue;
+        sent += await pushStaff(s.id, async (lang) => {
+          if (!byLang.has(lang)) byLang.set(lang, await calendarRange(b.id, tomorrow, tomorrow, cleanLang(lang)));
+          const items = (byLang.get(lang)?.[0]?.items ?? []).filter((it) => it.kind === "person" && it.person === s.name);
+          return items.length ? { title: await ntText(lang, "ntDuty"), body: items.map((it) => it.name || it.message).join(" · "), tag: "duty" } : { title: "", body: "" };
+        }, subs);
+      }
+    }
+  }
+  // old send-once markers are no longer needed
+  await supabase.from("push_log").delete().lt("created_at", new Date(now - 40 * 86400000).toISOString());
+  return json({ ok: true, sent });
+}
+
+// ---------- subscribe / settings ----------
+
+function cleanSub(raw: unknown): { endpoint: string; p256dh: string; auth: string } | null {
+  const r = (raw && typeof raw === "object") ? raw as Record<string, unknown> : {};
+  const keys = (r.keys && typeof r.keys === "object") ? r.keys as Record<string, unknown> : {};
+  const endpoint = String(r.endpoint ?? ""), p256dh = String(keys.p256dh ?? ""), auth = String(keys.auth ?? "");
+  if (!/^https:\/\/[^\s]{10,1000}$/.test(endpoint) || !/^[A-Za-z0-9_-]{40,200}$/.test(p256dh) || !/^[A-Za-z0-9_-]{8,100}$/.test(auth)) return null;
+  return { endpoint, p256dh, auth };
+}
+
+async function saveSub(row: Record<string, unknown>, p: Record<string, unknown>) {
+  if (/^https:\/\//.test(String(p._origin ?? ""))) await setSetting("push_origin", String(p._origin));
+  await supabase.from("push_subs").delete().eq("endpoint", row.endpoint);
+  const { error } = await supabase.from("push_subs").insert({ ...row, lang: cleanLang(p.lang), user_agent: String(p._ua ?? "") });
+  return error ? json({ ok: false, error: "need_migration_0008" }) : json({ ok: true });
+}
+
+async function handlePushKey() {
+  try { return json({ ok: true, public_key: (await getVapid()).publicKey }); }
+  catch (e) { return json({ ok: false, error: String(e) }); }
+}
+
+// Staff: this phone gets my notifications (needs my PIN). Never on the shop's shared tablet.
+async function handlePushSubscribe(p: Record<string, unknown>) {
+  const sub = cleanSub(p.sub);
+  if (!sub) return json({ ok: false, error: "bad_sub" });
+  const kb = await staffBranch(p);
+  if (typeof kb === "string") return json({ ok: false, error: kb });
+  if (kb.viewer.kiosk) return json({ ok: false, error: "kiosk_no_push" });
+  const who = await staffByPin(p);
+  if (typeof who === "string") return json({ ok: false, error: who });
+  return saveSub({ ...sub, role: "staff", staff_id: who.s.id, branch_id: who.b.id }, p);
+}
+
+// Admin: this device gets admin notifications (branch_id empty = every branch).
+async function handlePushSubscribeAdmin(p: Record<string, unknown>) {
+  { const g = await adminGate(p); if (g) return g; }
+  const sub = cleanSub(p.sub);
+  if (!sub) return json({ ok: false, error: "bad_sub" });
+  const branch = String(p.branch_id ?? "") || null;
+  return saveSub({ ...sub, role: "admin", staff_id: null, branch_id: branch }, p);
+}
+
+// Anyone holding the subscription (it is secret to that browser) can turn it off or ask who it is for.
+async function handlePushUnsubscribe(p: Record<string, unknown>) {
+  const endpoint = String(p.endpoint ?? "");
+  if (endpoint) await supabase.from("push_subs").delete().eq("endpoint", endpoint);
+  return json({ ok: true });
+}
+async function handlePushStatus(p: Record<string, unknown>) {
+  const { data } = await supabase.from("push_subs").select("role, staff_id, branch_id").eq("endpoint", String(p.endpoint ?? "")).maybeSingle();
+  return json({ ok: true, sub: data ?? null });
+}
+
+async function handleNotifySettings(p: Record<string, unknown>) {
+  { const g = await adminGate(p); if (g) return g; }
+  const id = String(p.branch_id ?? "");
+  const { data: b, error } = await supabase.from("branches").select("id, notify").eq("id", id).maybeSingle();
+  if (error) return json({ ok: false, error: "need_migration_0008" });
+  if (!b) return json({ ok: false, error: "unknown_branch" });
+  let secret = await getSetting<string>("cron_secret", "");
+  if (!secret) { secret = newAccessKey() + newAccessKey(); await setSetting("cron_secret", secret); }
+  const [{ data: subs }, { data: staff }] = await Promise.all([
+    supabase.from("push_subs").select("id, role, staff_id, branch_id, user_agent, created_at, last_ok, endpoint"),
+    supabase.from("staff").select("id, name, label, branch_id"),
+  ]);
+  const list = (subs ?? []).filter((x) => x.role === "admin" || x.branch_id === id).map((x) => {
+    const s = (staff ?? []).find((y) => y.id === x.staff_id);
+    return { id: x.id, role: x.role, staff: s ? (s.label || s.name) : "", branch_id: x.branch_id, user_agent: x.user_agent,
+      created_at: x.created_at, last_ok: x.last_ok, tail: String(x.endpoint).slice(-12) };
+  });
+  return json({ ok: true, notify: notifyCfg(b.notify), cron_secret: secret, cron_last: await getSetting<string>("cron_last", ""), subs: list });
+}
+
+async function handleSaveNotify(p: Record<string, unknown>) {
+  { const g = await adminGate(p); if (g) return g; }
+  const id = String(p.branch_id ?? "");
+  const cfg = notifyCfg(p.notify);
+  const { error } = await supabase.from("branches").update({ notify: cfg }).eq("id", id);
+  if (error) return json({ ok: false, error: "need_migration_0008" });
+  await logAdmin("save_notify", { id, ...cfg });
+  return json({ ok: true });
+}
+
+async function handlePushDelete(p: Record<string, unknown>) {
+  { const g = await adminGate(p); if (g) return g; }
+  await supabase.from("push_subs").delete().eq("id", Number(p.id) || 0);
+  return json({ ok: true });
+}
+
+// Admin: try it — sends to this device (endpoint) or every admin device.
+async function handlePushTest(p: Record<string, unknown>) {
+  { const g = await adminGate(p); if (g) return g; }
+  const subs = (await loadSubs()).filter((x) => p.endpoint ? x.endpoint === p.endpoint : x.role === "admin");
+  let ok = 0;
+  for (const s of subs) if (await sendPush(s, { title: "🔔 ทดสอบแจ้งเตือน", body: "ถ้าเห็นข้อความนี้ แจ้งเตือนใช้ได้แล้ว", tag: "test", url: s.role === "admin" ? "./admin.html" : "./index.html" })) ok++;
+  return json({ ok: true, sent: ok, total: subs.length });
 }
 
 // ============================================================
@@ -2380,6 +2786,16 @@ const ACTIONS: Record<string, (p: Record<string, unknown>) => Promise<Response>>
   device_hello: handleDeviceHello,
   staff_login: handleStaffLogin,
   staff_logout: handleStaffLogout,
+  push_key: handlePushKey,
+  push_subscribe: handlePushSubscribe,
+  push_subscribe_admin: handlePushSubscribeAdmin,
+  push_unsubscribe: handlePushUnsubscribe,
+  push_status: handlePushStatus,
+  push_delete: handlePushDelete,
+  push_test: handlePushTest,
+  notify_settings: handleNotifySettings,
+  save_notify: handleSaveNotify,
+  cron_tick: handleCronTick,
 };
 
 Deno.serve(async (req) => {
@@ -2391,6 +2807,7 @@ Deno.serve(async (req) => {
     // who is calling, from the request itself (never trusted from the body)
     params._ip = (req.headers.get("x-forwarded-for") ?? "").split(",")[0].trim() || (req.headers.get("x-real-ip") ?? "");
     params._ua = (req.headers.get("user-agent") ?? "").slice(0, 200);
+    params._origin = (req.headers.get("origin") ?? "").slice(0, 200);
     const action = String(params.action ?? "");
     const handler = ACTIONS[action];
     if (!handler) return json({ ok: false, error: "unknown_action: " + action }, 404);

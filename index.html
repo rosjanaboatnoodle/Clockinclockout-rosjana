@@ -103,6 +103,8 @@
   .tag{ color:#fff; font-size:12px; font-weight:900; border-radius:999px; padding:2px 9px; max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .weekNone{ color:var(--muted); font-weight:800; font-size:13px; }
   .moreBtn{ display:block; width:100%; margin-top:6px; border:none; background:transparent; color:#4338ca; font-weight:900; font-size:13px; padding:6px; cursor:pointer; }
+  .pushRow{ margin:10px 0 4px; }
+  .pushRow .sendBtn{ width:100%; }
   .linkBtn{ border:none; background:#fff; color:#4338ca; font-weight:900; font-size:13px; border-radius:999px; padding:7px 12px; cursor:pointer; }
   .cardHead{ display:flex; justify-content:space-between; align-items:center; gap:8px; margin-bottom:6px; }
   .cardHead .cardTitle{ margin:0; }
@@ -369,6 +371,7 @@
       }
       showDeviceBox(null);
       document.getElementById("logoutRow").style.display = j.me ? "" : "none";
+      IS_KIOSK = !!j.kiosk;
       applyBoot(j);
       if (KEY) lsSet(cacheKey, JSON.stringify({ branches: j.branches, dict: j.dict, has_admin: j.has_admin, tz: j.tz }));
     } else if (!cached){
@@ -838,6 +841,72 @@
     catch(e){ return d; }
   }
 
+  // ---------- แจ้งเตือน (เปิดบนมือถือของตัวเองเท่านั้น ไม่ใช่เครื่องกลางร้าน) ----------
+  let IS_KIOSK = false;
+
+  function pushSupport(){
+    const ios = /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+    const standalone = window.matchMedia("(display-mode: standalone)").matches || navigator.standalone === true;
+    if (ios && !standalone) return "needHome";
+    if (!("serviceWorker" in navigator) || !("PushManager" in window) || !("Notification" in window)) return "no";
+    return "ok";
+  }
+
+  function b64uBytes(v){
+    let s = v.replace(/-/g, "+").replace(/_/g, "/"); while (s.length % 4) s += "=";
+    return Uint8Array.from(atob(s), c => c.charCodeAt(0));
+  }
+
+  async function currentPushSub(){
+    try{ const reg = await navigator.serviceWorker.getRegistration(); return reg ? await reg.pushManager.getSubscription() : null; }
+    catch(e){ return null; }
+  }
+
+  function pushRow(pin){
+    const row = el("div", "pushRow");
+    const msg = el("div", "fine");
+    const btn = el("button", "sendBtn");
+    row.append(btn, msg);
+    const sup = pushSupport();
+    if (sup !== "ok"){ btn.style.display = "none"; msg.textContent = t(sup === "needHome" ? "pushNeedHome" : "pushNo"); return row; }
+    let on = false;
+    const show = () => { btn.textContent = on ? t("pushOff") : t("pushOn"); };
+    (async () => {
+      const sub = await currentPushSub();
+      if (sub){
+        const j = await api({ action: "push_status", endpoint: sub.endpoint });
+        on = !!(j && j.sub && j.sub.role === "staff" && j.sub.staff_id === current.id);
+        if (j && j.sub && j.sub.role === "staff" && !on) msg.textContent = t("pushOther");
+      }
+      show();
+    })();
+    show();
+    btn.onclick = async () => {
+      btn.disabled = true; msg.textContent = "";
+      try{
+        if (on){
+          const sub = await currentPushSub();
+          if (sub){ await api({ action: "push_unsubscribe", endpoint: sub.endpoint }); await sub.unsubscribe(); }
+          on = false; msg.textContent = t("pushIsOff");
+        } else {
+          const perm = await Notification.requestPermission();
+          if (perm !== "granted"){ msg.textContent = t("pushDenied"); return; }
+          const k = await api({ action: "push_key" });
+          if (!k || !k.ok){ msg.textContent = errorText(k); return; }
+          const reg = await navigator.serviceWorker.register("sw.js");
+          await navigator.serviceWorker.ready;
+          let sub = await reg.pushManager.getSubscription();
+          if (!sub) sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64uBytes(k.public_key) });
+          const j = await api({ action: "push_subscribe", key: KEY, staff_id: current.id, pin, lang, sub: sub.toJSON() });
+          if (!j || !j.ok){ msg.textContent = j && j.error === "kiosk_no_push" ? t("pushKiosk") : errorText(j); return; }
+          on = true; msg.textContent = t("pushIsOn");
+        }
+      } catch(e){ msg.textContent = t("pushNo"); }
+      finally { btn.disabled = false; show(); }
+    };
+    return row;
+  }
+
   async function openMy(){
     if (!current) return;
     const pin = document.getElementById("pinInput").value.trim();
@@ -863,6 +932,7 @@
     stat(fmtBaht(j.pending_total), t("myPending"));
     if (j.late_times) stat(String(j.late_times), t("lateTimes"));
     box.appendChild(stats);
+    if (!IS_KIOSK) box.appendChild(pushRow(pin));
     if (!j.advances.length) box.appendChild(el("div", "empty", t("noAdvances")));
     j.advances.slice().reverse().forEach(a => {
       const row = el("div", "advRow");
