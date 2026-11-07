@@ -1,6 +1,6 @@
 // Edge Function "clock" — ระบบตอกบัตร (ใช้ Supabase project เดียวกับปฏิทินได้ หรือใช้เดี่ยวๆ ก็ได้)
 //
-// Database: run supabase/migrations/0001_clock.sql … 0005_shifts.sql in order.
+// Database: run supabase/migrations/0001_clock.sql … 0006_access.sql in order.
 // Deploy: Supabase Dashboard -> Edge Functions -> create function named "clock" ->
 // paste this file's contents -> Deploy -> แท็บ Settings -> ปิด "Verify JWT with legacy secret"
 //
@@ -131,11 +131,85 @@ function newAccessKey(): string {
   return [...crypto.getRandomValues(new Uint8Array(8))].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
-async function branchFromKey(p: Record<string, unknown>): Promise<{ id: string } | null> {
+type KeyBranch = { id: string; name?: string; require_device?: boolean; require_ip?: boolean; allowed_ips?: string[] };
+
+async function branchFromKey(p: Record<string, unknown>): Promise<KeyBranch | null> {
   const key = String(p.key ?? "").trim();
   if (!/^[a-f0-9]{8,64}$/i.test(key)) return null;
-  const { data } = await supabase.from("branches").select("id").eq("access_key", key.toLowerCase()).maybeSingle();
-  return data ?? null;
+  const q = (cols: string) => supabase.from("branches").select(cols).eq("access_key", key.toLowerCase()).maybeSingle();
+  let { data, error } = await q("id, name, require_device, require_ip, allowed_ips");
+  if (error) ({ data } = await q("id, name")); // 0006_access.sql not run yet: no extra locks
+  return (data as KeyBranch | null) ?? null;
+}
+
+// Staff actions: the branch from the link, after the device lock. Returns an error code instead when refused.
+async function staffBranch(p: Record<string, unknown>): Promise<KeyBranch | string> {
+  const b = await branchFromKey(p);
+  if (!b) return "bad_link";
+  const devErr = await deviceError(b, p);
+  return devErr ?? b;
+}
+
+// ---------- Device lock (optional, per branch) ----------
+// Each browser keeps a random id. With require_device on, only ids the admin approved can open the page,
+// so a forwarded link is useless on someone else's phone. Ids are recorded even with the lock off,
+// so turning it on can approve the phones already in use in one go.
+
+const MAX_DEVICES_PER_BRANCH = 300;
+
+function cleanDevice(v: unknown): string {
+  const d = String(v ?? "").trim().toLowerCase();
+  return /^[a-f0-9]{16,64}$/.test(d) ? d : "";
+}
+
+function deviceCode(d: string): string {
+  return d.slice(0, 4).toUpperCase();
+}
+
+async function deviceError(b: KeyBranch, p: Record<string, unknown>, touch = false): Promise<string | null> {
+  // lock off: phones are only recorded when the page opens (bootstrap), not on every call
+  if (!b.require_device && !touch) return null;
+  const dev = cleanDevice(p.device);
+  if (!dev) return b.require_device ? "device_pending" : null;
+  const { data, error } = await supabase.from("devices").select("id, status").eq("branch_id", b.id).eq("device_id", dev).maybeSingle();
+  if (error) return null; // table missing (0006 not run): lock can't be on anyway
+  if (!data) {
+    const { count } = await supabase.from("devices").select("id", { count: "exact", head: true }).eq("branch_id", b.id);
+    if ((count ?? 0) < MAX_DEVICES_PER_BRANCH) {
+      await supabase.from("devices").insert({
+        branch_id: b.id, device_id: dev, user_agent: String(p._ua ?? ""), last_ip: String(p._ip ?? ""),
+      });
+    }
+    return b.require_device ? "device_pending" : null;
+  }
+  if (touch) {
+    await supabase.from("devices").update({ last_seen: new Date().toISOString(), last_ip: String(p._ip ?? ""), user_agent: String(p._ua ?? "") }).eq("id", data.id);
+  }
+  if (!b.require_device || data.status === "approved") return null;
+  return data.status === "blocked" ? "device_blocked" : "device_pending";
+}
+
+// ---------- Shop internet lock (optional, per branch) ----------
+// IPv4 is compared whole. IPv6 phones get a new address often, so only the network part (first 4 groups) counts.
+
+function ipTag(raw: string): string {
+  const ip = raw.trim().toLowerCase();
+  if (!ip) return "";
+  if (!ip.includes(":")) return ip;
+  if (ip.startsWith("::ffff:") && ip.includes(".")) return ip.slice(7);
+  const [head, tail = ""] = ip.split("::");
+  const h = head ? head.split(":") : [];
+  const t = tail ? tail.split(":") : [];
+  const groups = ip.includes("::") ? [...h, ...Array(Math.max(0, 8 - h.length - t.length)).fill("0"), ...t] : h;
+  return groups.slice(0, 4).map((g) => g.replace(/^0+(?=.)/, "")).join(":") + "::/64";
+}
+
+async function ipError(b: KeyBranch, p: Record<string, unknown>, staffName: string): Promise<string | null> {
+  if (!b.require_ip) return null;
+  const tag = ipTag(String(p._ip ?? ""));
+  if (tag && (b.allowed_ips ?? []).includes(tag)) return null;
+  await logAdmin("ip_reject", { branch: b.id, ip: tag, staff: staffName });
+  return "ip_not_allowed";
 }
 
 // Gives every branch a key (branches made before keys existed, or by the calendar app).
@@ -407,6 +481,17 @@ async function handleBootstrap(p: Record<string, unknown>) {
   } else {
     const b = await branchFromKey(p);
     only = b?.id ?? null;
+    const devErr = b ? await deviceError(b, p, true) : null;
+    if (b && devErr) {
+      // phone not approved yet: show only that, nothing about the branch's people
+      let dict: Record<string, string> = {};
+      try { dict = dictFor(await getTranslations(undefined, "ui.clock."), lang); } catch (_) { /* Thai fallback */ }
+      return json({
+        ok: true, lang, tz: shopTz(), has_admin: true, branches: [], dict,
+        device: devErr === "device_blocked" ? "blocked" : "pending",
+        device_code: deviceCode(cleanDevice(p.device)), branch_name: b.name ?? "",
+      });
+    }
   }
   const cols = "id, name, sort, lat, lng, radius_m, require_gps, require_photo" + (admin ? ", access_key, photo_keep_days" : "");
   let bq = supabase.from("branches").select(cols);
@@ -635,8 +720,8 @@ async function myDuties(branchId: string, staffName: string, lang: Lang) {
 
 // Public, read-only: a whole month of the calendar for the staff page.
 async function handleScheduleMonth(p: Record<string, unknown>) {
-  const b = await branchFromKey(p);
-  if (!b) return json({ ok: false, error: "bad_link" });
+  const b = await staffBranch(p);
+  if (typeof b === "string") return json({ ok: false, error: b });
   const branchId = b.id;
   const month = String(p.month ?? "");
   if (!/^\d{4}-\d{2}$/.test(month)) return json({ ok: false, error: "bad_month" });
@@ -648,8 +733,8 @@ async function handleScheduleMonth(p: Record<string, unknown>) {
 
 // Public: today's list and today's calendar messages for the branch.
 async function handleToday(p: Record<string, unknown>) {
-  const b = await branchFromKey(p);
-  if (!b) return json({ ok: false, error: "bad_link" });
+  const b = await staffBranch(p);
+  if (typeof b === "string") return json({ ok: false, error: b });
   const branchId = b.id;
   const lang = cleanLang(p.lang);
   const [punches, messages, week] = await Promise.all([
@@ -714,8 +799,8 @@ async function savePhoto(branchId: string, staffId: number, type: string, photo:
 // Public with the person's own PIN. type: "in" | "out"
 // Optional: lat, lng, accuracy (metres) and photo (data URL), required when the branch asks for them.
 async function handlePunch(p: Record<string, unknown>) {
-  const kb = await branchFromKey(p);
-  if (!kb) return json({ ok: false, error: "bad_link" });
+  const kb = await staffBranch(p);
+  if (typeof kb === "string") return json({ ok: false, error: kb });
   const branchId = kb.id;
   const staffId = Number(p.staff_id) || 0;
   const type = ["out", "break_start", "break_end"].includes(String(p.type)) ? String(p.type) : "in";
@@ -728,6 +813,10 @@ async function handlePunch(p: Record<string, unknown>) {
   if (!person || !person.active || person.branch_id !== branchId) return json({ ok: false, error: "unknown_staff" });
   const pinErr = await staffPinError(person, pin);
   if (pinErr) return json({ ok: false, error: pinErr });
+  const netErr = await ipError(kb, p, person.name);
+  if (netErr) return json({ ok: false, error: netErr });
+  const dev = cleanDevice(p.device);
+  if (dev) await supabase.from("devices").update({ last_staff: person.name }).eq("branch_id", branchId).eq("device_id", dev);
   if (type === "break_start" || type === "break_end") return punchBreak(branchId, staffId, type, lang);
 
   const { data: branch } = await supabase.from("branches")
@@ -2006,8 +2095,8 @@ async function staffByPin(p: Record<string, unknown>): Promise<{ s: StaffFull; b
   if (!/^\d{4,6}$/.test(pin)) return "pin_invalid";
   const { data: s } = await supabase.from("staff").select("id, branch_id, name, label, active, pay, period, pin_hash")
     .eq("id", Number(p.staff_id) || 0).maybeSingle();
-  const kb = await branchFromKey(p);
-  if (!kb) return "bad_link";
+  const kb = await staffBranch(p);
+  if (typeof kb === "string") return kb;
   if (!s || !s.active || s.branch_id !== kb.id) return "unknown_staff";
   const pinErr = await staffPinError(s, pin);
   if (pinErr) return pinErr;
@@ -2053,6 +2142,91 @@ async function handleRequestAdvance(p: Record<string, unknown>) {
   });
   if (error) return json({ ok: false, error: error.message });
   return json({ ok: true, status: auto ? "approved" : "pending" });
+}
+
+// ============================================================
+// Admin: device lock + shop internet lock
+// ============================================================
+
+async function handleAccessSettings(p: Record<string, unknown>) {
+  { const g = await adminGate(p); if (g) return g; }
+  const id = String(p.branch_id ?? "");
+  const { data: b, error } = await supabase.from("branches").select("id, require_device, require_ip, allowed_ips").eq("id", id).maybeSingle();
+  if (error) return json({ ok: false, error: "need_migration_0006" });
+  if (!b) return json({ ok: false, error: "unknown_branch" });
+  const [{ data: devices }, { data: log }] = await Promise.all([
+    supabase.from("devices").select("id, device_id, label, status, user_agent, last_ip, last_staff, created_at, last_seen")
+      .eq("branch_id", id).order("last_seen", { ascending: false }).limit(MAX_DEVICES_PER_BRANCH),
+    supabase.from("admin_log").select("created_at, details").eq("action", "ip_reject")
+      .order("created_at", { ascending: false }).limit(200),
+  ]);
+  // latest refused shop-internet attempts, one row per address
+  const seen = new Set<string>();
+  const rejected: Array<{ ip: string; at: string; staff: string }> = [];
+  for (const r of log ?? []) {
+    const d = (r.details ?? {}) as Record<string, string>;
+    if (d.branch !== id || !d.ip || seen.has(d.ip) || (b.allowed_ips ?? []).includes(d.ip)) continue;
+    seen.add(d.ip);
+    rejected.push({ ip: d.ip, at: r.created_at, staff: d.staff ?? "" });
+    if (rejected.length >= 10) break;
+  }
+  return json({
+    ok: true,
+    require_device: b.require_device, require_ip: b.require_ip, allowed_ips: b.allowed_ips ?? [],
+    my_ip: ipTag(String(p._ip ?? "")),
+    devices: (devices ?? []).map((d) => ({ ...d, code: deviceCode(d.device_id), device_id: undefined })),
+    rejected,
+  });
+}
+
+async function handleSaveAccess(p: Record<string, unknown>) {
+  { const g = await adminGate(p); if (g) return g; }
+  const id = String(p.branch_id ?? "");
+  const ips = [...new Set((Array.isArray(p.allowed_ips) ? p.allowed_ips : []).map((v) => ipTag(String(v))).filter(Boolean))].slice(0, 20);
+  if (p.require_ip && !ips.length) return json({ ok: false, error: "ip_needed" });
+  const row = { require_device: !!p.require_device, require_ip: !!p.require_ip, allowed_ips: ips };
+  const { error } = await supabase.from("branches").update(row).eq("id", id);
+  if (error) return json({ ok: false, error: "need_migration_0006" });
+  let approved = 0;
+  if (p.require_device && p.approve_recent) {
+    // phones that opened the page in the last 30 days are let in, so nobody is locked out on day one
+    const since = new Date(Date.now() - 30 * 86400000).toISOString();
+    const { data } = await supabase.from("devices").update({ status: "approved", decided_at: new Date().toISOString() })
+      .eq("branch_id", id).eq("status", "pending").gte("last_seen", since).select("id");
+    approved = data?.length ?? 0;
+  }
+  await logAdmin("save_access", { id, ...row, approved });
+  return json({ ok: true, approved });
+}
+
+async function handleDecideDevice(p: Record<string, unknown>) {
+  { const g = await adminGate(p); if (g) return g; }
+  const id = Number(p.id) || 0;
+  const status = String(p.status ?? "");
+  if (status === "delete") {
+    const { error } = await supabase.from("devices").delete().eq("id", id);
+    if (error) return json({ ok: false, error: error.message });
+  } else {
+    const row: Record<string, unknown> = {};
+    if (["approved", "blocked", "pending"].includes(status)) { row.status = status; row.decided_at = new Date().toISOString(); }
+    if (p.label !== undefined) row.label = String(p.label).trim().slice(0, 60);
+    const { error } = await supabase.from("devices").update(row).eq("id", id);
+    if (error) return json({ ok: false, error: error.message });
+  }
+  await logAdmin("decide_device", { id, status });
+  return json({ ok: true });
+}
+
+// Staff: put a name on a phone that waits for approval, so the admin knows whose it is.
+async function handleDeviceHello(p: Record<string, unknown>) {
+  const b = await branchFromKey(p);
+  if (!b) return json({ ok: false, error: "bad_link" });
+  const dev = cleanDevice(p.device);
+  if (!dev) return json({ ok: false, error: "bad_device" });
+  const { error } = await supabase.from("devices").update({ label: String(p.name ?? "").trim().slice(0, 60) })
+    .eq("branch_id", b.id).eq("device_id", dev).eq("status", "pending");
+  if (error) return json({ ok: false, error: error.message });
+  return json({ ok: true });
 }
 
 // ============================================================
@@ -2103,6 +2277,10 @@ const ACTIONS: Record<string, (p: Record<string, unknown>) => Promise<Response>>
   translate_page: handleTranslatePage,
   list_translations: handleListTranslations,
   save_translations: handleSaveTranslations,
+  access_settings: handleAccessSettings,
+  save_access: handleSaveAccess,
+  decide_device: handleDecideDevice,
+  device_hello: handleDeviceHello,
 };
 
 Deno.serve(async (req) => {
@@ -2111,6 +2289,9 @@ Deno.serve(async (req) => {
     const params: Record<string, unknown> = req.method === "GET"
       ? Object.fromEntries(new URL(req.url).searchParams)
       : await req.json();
+    // who is calling, from the request itself (never trusted from the body)
+    params._ip = (req.headers.get("x-forwarded-for") ?? "").split(",")[0].trim() || (req.headers.get("x-real-ip") ?? "");
+    params._ua = (req.headers.get("user-agent") ?? "").slice(0, 200);
     const action = String(params.action ?? "");
     const handler = ACTIONS[action];
     if (!handler) return json({ ok: false, error: "unknown_action: " + action }, 404);

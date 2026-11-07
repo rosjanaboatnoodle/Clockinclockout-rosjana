@@ -170,6 +170,20 @@
       <button onclick="useLink()" data-t="useLink" style="margin-top:8px; width:100%; border:none; border-radius:10px; padding:11px; font-weight:900; background:#0f172a; color:#fff; font-size:14px;">ใช้ลิงก์นี้</button>
     </div>
 
+    <!-- สาขาเปิดล็อกเครื่อง: เครื่องนี้ยังไม่ได้รับอนุญาต -->
+    <div class="card" id="deviceBox" style="display:none;">
+      <div class="cardTitle" id="deviceTitle"></div>
+      <div class="cardHint" id="deviceText"></div>
+      <div id="deviceAsk">
+        <input id="deviceName" data-tp="deviceNamePh" placeholder="ชื่อของคุณ" maxlength="60" style="width:100%; padding:10px; border-radius:10px; border:2px solid #c7d2fe; font-size:15px; box-sizing:border-box; margin-top:8px;">
+        <button onclick="sendDeviceName()" data-t="deviceSend" style="margin-top:8px; width:100%; border:none; border-radius:10px; padding:11px; font-weight:900; background:#0f172a; color:#fff; font-size:14px;">ส่งชื่อให้แอดมิน</button>
+      </div>
+      <button onclick="recheckDevice()" data-t="deviceRecheck" style="margin-top:8px; width:100%; border:2px solid #c7d2fe; border-radius:10px; padding:10px; font-weight:900; background:#fff; color:#0f172a; font-size:14px;">🔄 แอดมินอนุญาตแล้ว กดเพื่อเข้าใช้</button>
+      <div class="cardHint" id="deviceStatus" style="margin-top:6px;"></div>
+    </div>
+
+    <div id="mainCards">
+
     <div class="card" id="msgCard" style="display:none;">
       <div class="cardTitle" data-t="todayTitle">📌 วันนี้</div>
       <div class="msgList" id="msgList"></div>
@@ -194,6 +208,7 @@
       <div class="cardTitle" data-t="historyTitle">ประวัติวันนี้</div>
       <div class="history" id="history"></div>
     </div>
+    </div><!-- mainCards -->
   </div>
 </div>
 
@@ -283,7 +298,15 @@
     catch(e){ return new Date(iso).toTimeString().slice(0, 5); }
   }
 
+  // รหัสสุ่มของเครื่องนี้ (ใช้กับล็อกเครื่อง ถ้าแอดมินเปิดไว้)
+  let DEVICE = lsGet("clock_device") || "";
+  if (!/^[a-f0-9]{32}$/.test(DEVICE)){
+    DEVICE = [...crypto.getRandomValues(new Uint8Array(16))].map(x => x.toString(16).padStart(2, "0")).join("");
+    lsSet("clock_device", DEVICE);
+  }
+
   async function api(params){
+    params = { device: DEVICE, ...params };
     try{
       const r = await fetch(API, {
         method: "POST",
@@ -324,6 +347,14 @@
         showBanner(t("badLink"));
         return;
       }
+      if (j.device){
+        // เครื่องนี้ยังไม่ได้รับอนุญาต: ไม่เก็บอะไรของสาขาไว้ในเครื่อง
+        lsSet(cacheKey, "");
+        applyBoot(j);
+        showDeviceBox(j);
+        return;
+      }
+      showDeviceBox(null);
       applyBoot(j);
       if (KEY) lsSet(cacheKey, JSON.stringify({ branches: j.branches, dict: j.dict, has_admin: j.has_admin, tz: j.tz }));
     } else if (!cached){
@@ -349,6 +380,32 @@
     document.getElementById("linkBox").style.display = KEY ? "none" : "";
   }
 
+  function showDeviceBox(j){
+    document.getElementById("deviceBox").style.display = j ? "" : "none";
+    document.getElementById("mainCards").style.display = j ? "none" : "";
+    if (!j) return;
+    showBanner("");
+    document.getElementById("branchName").textContent = j.branch_name || "";
+    const blocked = j.device === "blocked";
+    document.getElementById("deviceTitle").textContent = blocked ? t("deviceBlockedTitle") : t("devicePendingTitle");
+    document.getElementById("deviceText").textContent = blocked ? t("deviceBlockedText") : t("devicePendingText", { code: j.device_code || "" });
+    document.getElementById("deviceAsk").style.display = blocked ? "none" : "";
+  }
+
+  async function sendDeviceName(){
+    const name = document.getElementById("deviceName").value.trim();
+    if (!name) return;
+    const j = await api({ action: "device_hello", key: KEY, name });
+    document.getElementById("deviceStatus").textContent = (j && j.ok) ? t("deviceSent") : t("connectFail");
+  }
+
+  async function recheckDevice(){
+    document.getElementById("deviceStatus").textContent = "";
+    await bootstrap();
+    if (document.getElementById("deviceBox").style.display !== "none") document.getElementById("deviceStatus").textContent = t("deviceStillPending");
+    else loadToday();
+  }
+
   // รับลิงก์เต็ม (…index.html?b=xxxx) หรือรหัสสาขาเปล่าๆ
   async function useLink(){
     const v = document.getElementById("linkInput").value.trim();
@@ -370,6 +427,7 @@
   function applyUiText(){
     document.documentElement.lang = lang;
     document.querySelectorAll("[data-t]").forEach(e => { e.textContent = t(e.dataset.t); });
+    document.querySelectorAll("[data-tp]").forEach(e => { e.placeholder = t(e.dataset.tp); });
     document.getElementById("langSelect").value = lang;
     tick();
     if (PROJECT_REF.startsWith("YOUR_") || SUPABASE_KEY.startsWith("YOUR_")){
@@ -427,6 +485,8 @@
       messages = j.messages || [];
       week = j.week === undefined ? null : j.week;
       renderAll();
+    } else if (j && (j.error === "device_pending" || j.error === "device_blocked")){
+      bootstrap(); // แอดมินเพิ่งเปิดล็อกเครื่อง หรือบล็อกเครื่องนี้
     }
   }
 
@@ -621,7 +681,8 @@
   const ERROR_KEYS = {
     wrong_pin: "wrongPin", pin_invalid: "pinInvalid", no_pin: "noPin", already_in: "alreadyIn", not_in: "notIn",
     gps_required: "gpsRequired", photo_required: "photoRequired", bad_photo: "photoFail", photo_too_large: "photoFail",
-    too_many_tries: "tooManyTries", bad_link: "badLink"
+    too_many_tries: "tooManyTries", bad_link: "badLink", ip_not_allowed: "ipNotAllowed",
+    device_pending: "devicePendingTitle", device_blocked: "deviceBlockedTitle"
   };
 
   function errorText(j){

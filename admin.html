@@ -169,7 +169,7 @@
       <button class="tab" data-tab="pay" onclick="showTab('pay')">เงิน</button>
       <button class="tab" data-tab="adv" onclick="showTab('adv')">เบิกเงิน<span class="count hidden" id="advCount"></span></button>
       <button class="tab" data-tab="staff" onclick="showTab('staff')">พนักงาน</button>
-      <button class="tab" data-tab="branches" onclick="showTab('branches')">สาขา</button>
+      <button class="tab" data-tab="branches" onclick="showTab('branches')">สาขา<span class="count hidden" id="devCount"></span></button>
       <button class="tab" data-tab="lang" onclick="showTab('lang')">ภาษา</button>
       <button class="tab" data-tab="account" onclick="showTab('account')">รหัสแอดมิน</button>
     </div>
@@ -368,6 +368,32 @@
         <button class="btn green" onclick="addBranch()">เพิ่มสาขา</button>
       </div>
       <div class="status" id="brStatus"></div>
+    </div>
+
+    <!-- ล็อกเพิ่ม (ไม่บังคับ) -->
+    <div class="card hidden" data-panel="branches">
+      <div class="cardTitle">🔒 ล็อกเพิ่ม (ไม่บังคับ)</div>
+      <div class="hint">ปิดไว้ = ใช้เหมือนเดิม ใครมีลิงก์ก็เปิดได้ (แต่ต้องรู้ PIN ถึงจะตอกบัตรได้)</div>
+
+      <label class="check"><input type="checkbox" id="reqDevice"> ล็อกกับเครื่อง: เครื่องใหม่ต้องให้แอดมินอนุญาตก่อน</label>
+      <div class="hint">ลิงก์หลุดไปก็เปิดไม่ได้ · เปลี่ยนมือถือ / ล้างข้อมูลเว็บ / เพิ่มไอคอนหน้าจอโฮม (iPhone) = นับเป็นเครื่องใหม่ ต้องอนุญาตอีกครั้ง</div>
+
+      <label class="check" style="margin-top:10px;"><input type="checkbox" id="reqIp"> ตอกบัตรได้เฉพาะตอนต่อ WiFi ของร้าน</label>
+      <div class="hint">ต่อ WiFi ร้านแล้วกด "เพิ่มเน็ตที่ใช้อยู่ตอนนี้" · ใช้เน็ตมือถือจะตอกไม่ได้ · ถ้าเน็ตร้านเปลี่ยนเลข (เช่น ไฟดับ/รีสตาร์ทเราเตอร์) จะขึ้นในช่อง "ถูกปฏิเสธล่าสุด" ให้กดอนุญาต</div>
+      <div id="ipList"></div>
+      <div class="row">
+        <button class="btn" onclick="addMyIp()">📶 เพิ่มเน็ตที่ใช้อยู่ตอนนี้</button>
+        <span class="hint" style="margin:0;" id="myIp"></span>
+      </div>
+      <div id="ipRejected"></div>
+
+      <div class="row" style="margin-top:8px;"><button class="btn dark" onclick="saveAccess()">บันทึกการล็อก</button></div>
+      <div class="status" id="accessStatus"></div>
+
+      <div class="cardTitle" style="margin-top:14px;">📱 เครื่องที่เคยเปิดหน้าตอกบัตร</div>
+      <div class="hint">รหัสเครื่อง = 4 ตัวที่ขึ้นบนหน้าจอของพนักงาน · ชื่อ = ที่พนักงานพิมพ์มา หรือแก้เองได้</div>
+      <div id="deviceList"></div>
+      <div class="status" id="deviceStatus"></div>
     </div>
 
     <!-- ภาษา -->
@@ -593,7 +619,131 @@
     $("branchLink").value = b ? staffLink(b) : "";
     setMsg("linkStatus", "");
     // รายชื่อพนักงานต้องมาก่อน ส่วนอื่นใช้ชื่อจากรายชื่อนี้
-    loadStaff().then(() => { loadPunches(); loadReview(); loadPaySettings(); });
+    loadStaff().then(() => { loadPunches(); loadReview(); loadPaySettings(); loadAccess(); });
+  }
+
+  // ---------- ล็อกเพิ่ม: เครื่อง + เน็ตร้าน ----------
+  let access = null; // { require_device, require_ip, allowed_ips, my_ip, devices, rejected }
+
+  async function loadAccess(){
+    const want = branchId;
+    const j = await api({ action: "access_settings", admin_pin: adminPin, branch_id: branchId });
+    if (want !== branchId) return;
+    if (!j || !j.ok){
+      access = null;
+      setMsg("accessStatus", j && j.error === "need_migration_0006" ? "ต้องรันไฟล์ 0006_access.sql ใน Supabase ก่อน" : errText(j), false);
+      $("devCount").classList.add("hidden");
+      return;
+    }
+    access = j;
+    $("reqDevice").checked = !!j.require_device;
+    $("reqIp").checked = !!j.require_ip;
+    renderAccess();
+  }
+
+  function deviceKind(ua){
+    ua = ua || "";
+    const os = /iPhone/.test(ua) ? "iPhone" : /iPad/.test(ua) ? "iPad" : /Android/.test(ua) ? "Android" : /Mac/.test(ua) ? "Mac" : /Windows/.test(ua) ? "Windows" : "เครื่องอื่น";
+    const br = /Line\//.test(ua) ? " (LINE)" : /CriOS|Chrome/.test(ua) ? " Chrome" : /Safari/.test(ua) ? " Safari" : "";
+    return os + br;
+  }
+
+  function renderAccess(){
+    const a = access;
+    // เน็ตที่อนุญาต
+    const ipBox = $("ipList"); ipBox.innerHTML = "";
+    a.allowed_ips.forEach((ip, i) => {
+      const r = el("div", "row");
+      r.appendChild(el("span", "chip", ip));
+      const x = el("button", "btn", "ลบ");
+      x.onclick = () => { a.allowed_ips.splice(i, 1); renderAccess(); setMsg("accessStatus", "กด \"บันทึกการล็อก\" เพื่อยืนยัน"); };
+      r.appendChild(x);
+      ipBox.appendChild(r);
+    });
+    if (!a.allowed_ips.length) ipBox.appendChild(el("div", "hint", "ยังไม่มีเน็ตที่อนุญาต"));
+    $("myIp").textContent = a.my_ip ? "เน็ตของเครื่องนี้: " + a.my_ip + (a.allowed_ips.includes(a.my_ip) ? " ✅" : "") : "";
+    const rej = $("ipRejected"); rej.innerHTML = "";
+    if (a.rejected.length){
+      rej.appendChild(el("div", "hint", "ถูกปฏิเสธล่าสุด (ถ้าเป็นเน็ตร้าน กดอนุญาต):"));
+      a.rejected.forEach(r => {
+        const row = el("div", "row");
+        row.appendChild(el("span", "sub", r.ip + " · " + fmt(r.at) + (r.staff ? " · " + r.staff : "")));
+        const ok = el("button", "btn green", "อนุญาต");
+        ok.onclick = () => { if (!a.allowed_ips.includes(r.ip)) a.allowed_ips.push(r.ip); a.rejected = a.rejected.filter(x => x.ip !== r.ip); saveAccess(); };
+        row.appendChild(ok);
+        rej.appendChild(row);
+      });
+    }
+    // เครื่อง: รออนุญาตขึ้นก่อน
+    const order = { pending: 0, approved: 1, blocked: 2 };
+    const list = a.devices.slice().sort((x, y) => order[x.status] - order[y.status]);
+    const box = $("deviceList"); box.innerHTML = "";
+    if (!list.length) box.appendChild(el("div", "hint", "ยังไม่มีเครื่องเปิดหน้าตอกบัตร (เครื่องจะขึ้นที่นี่หลังพนักงานเปิดลิงก์)"));
+    list.forEach(d => {
+      const card = el("div", "staffCard");
+      const head = el("div", "row");
+      const badge = d.status === "approved" ? el("span", "badge ok", "อนุญาตแล้ว") : d.status === "blocked" ? el("span", "badge no", "บล็อก") : el("span", "badge", "รออนุญาต");
+      if (d.status === "pending") badge.style.cssText = "background:#fef3c7; color:#92400e;";
+      head.appendChild(badge);
+      head.appendChild(el("b", "", "รหัส " + d.code));
+      head.appendChild(el("span", "sub", deviceKind(d.user_agent)));
+      card.appendChild(head);
+      card.appendChild(el("div", "hint", "เปิดล่าสุด " + fmt(d.last_seen) + (d.last_staff ? " · ตอกบัตรล่าสุด: " + d.last_staff : "")));
+      const row = el("div", "row");
+      const name = el("input", "field"); name.placeholder = "ชื่อเครื่อง / เจ้าของ"; name.value = d.label || "";
+      row.appendChild(name);
+      const save = el("button", "btn", "บันทึกชื่อ");
+      save.onclick = () => decideDevice(d.id, null, name.value);
+      row.appendChild(save);
+      card.appendChild(row);
+      const acts = el("div", "row");
+      const add = (text, cls, status, ask) => {
+        const b = el("button", "btn " + cls, text);
+        b.onclick = () => { if (!ask || confirm(ask)) decideDevice(d.id, status, name.value); };
+        acts.appendChild(b);
+      };
+      if (d.status !== "approved") add("✅ อนุญาต", "green", "approved");
+      if (d.status !== "blocked") add("⛔ บล็อก", "", "blocked", "บล็อกเครื่องรหัส " + d.code + "?\nเครื่องนี้จะเปิดหน้าตอกบัตรไม่ได้ (มีผลตอนเปิดล็อกกับเครื่อง)");
+      add("ลบ", "", "delete", "ลบเครื่องรหัส " + d.code + " ออกจากรายการ?\nถ้าเปิดลิงก์อีก จะขึ้นเป็นเครื่องใหม่รออนุญาต");
+      card.appendChild(acts);
+      box.appendChild(card);
+    });
+    const waiting = a.require_device ? a.devices.filter(d => d.status === "pending").length : 0;
+    $("devCount").textContent = waiting;
+    $("devCount").classList.toggle("hidden", !waiting);
+  }
+
+  function addMyIp(){
+    if (!access) return;
+    if (!access.my_ip){ setMsg("accessStatus", "หาเน็ตของเครื่องนี้ไม่เจอ ลองใหม่", false); return; }
+    if (!access.allowed_ips.includes(access.my_ip)) access.allowed_ips.push(access.my_ip);
+    renderAccess();
+    setMsg("accessStatus", "เพิ่มแล้ว กด \"บันทึกการล็อก\" เพื่อยืนยัน (ต้องต่อ WiFi ร้านอยู่)");
+  }
+
+  async function saveAccess(){
+    if (!access) return;
+    const reqDevice = $("reqDevice").checked, reqIp = $("reqIp").checked;
+    if (reqIp && !access.allowed_ips.length){ setMsg("accessStatus", "ต่อ WiFi ร้านแล้วกด \"เพิ่มเน็ตที่ใช้อยู่ตอนนี้\" ก่อน", false); return; }
+    let approveRecent = false;
+    if (reqDevice && !access.require_device){
+      const n = access.devices.filter(d => d.status === "pending").length;
+      approveRecent = n > 0 && confirm("อนุญาตเครื่องที่ใช้อยู่ตอนนี้ทั้งหมด (" + n + " เครื่อง ที่เปิดใน 30 วันล่าสุด) เลยไหม?\n\nตกลง = อนุญาตเลย พนักงานใช้ต่อได้ทันที\nยกเลิก = ต้องกดอนุญาตทีละเครื่อง");
+    }
+    const j = await api({ action: "save_access", admin_pin: adminPin, branch_id: branchId,
+      require_device: reqDevice, require_ip: reqIp, allowed_ips: access.allowed_ips, approve_recent: approveRecent });
+    if (!j || !j.ok){ setMsg("accessStatus", j && j.error === "ip_needed" ? "ต่อ WiFi ร้านแล้วกด \"เพิ่มเน็ตที่ใช้อยู่ตอนนี้\" ก่อน" : errText(j), false); return; }
+    await loadAccess();
+    setMsg("accessStatus", "บันทึกแล้ว" + (j.approved ? " · อนุญาต " + j.approved + " เครื่อง" : ""), true);
+  }
+
+  async function decideDevice(id, status, label){
+    const p = { action: "decide_device", admin_pin: adminPin, id, label };
+    if (status) p.status = status;
+    const j = await api(p);
+    if (!j || !j.ok){ setMsg("deviceStatus", errText(j), false); return; }
+    await loadAccess();
+    setMsg("deviceStatus", status === "approved" ? "อนุญาตแล้ว บอกพนักงานกด \"แอดมินอนุญาตแล้ว\" ในหน้าตอกบัตร" : "บันทึกแล้ว", true);
   }
 
   function staffLink(b){
@@ -1836,6 +1986,7 @@
     if (name === "pay"){ loadPaySettings(); loadPaySummary(); loadPending(); loadHistory(); }
     if (name === "shifts"){ loadPaySettings().then(() => { renderShiftList(); loadRoster(); }); }
     if (name === "adv"){ loadPaySettings(); loadAdvances(); }
+    if (name === "branches") loadAccess();
   }
 
   $("loginPin").addEventListener("keydown", e => { if (e.key === "Enter") doLogin(); });
