@@ -76,6 +76,8 @@
 
   .overlay{ position:fixed; inset:0; background:rgba(0,0,0,.45); display:none; align-items:center; justify-content:center; padding:18px; z-index:99; }
   .overlay.show{ display:flex; }
+  .mePanel .modal{ width:100%; max-height:none; overflow:visible; box-shadow:none; padding:14px; border-radius:14px; }
+  .meState{ display:inline-flex; align-items:center; gap:6px; font-size:13px; font-weight:800; color:#475569; margin-left:8px; vertical-align:middle; }
   .modal{ width:min(420px,100%); max-height:calc(100vh - 36px); overflow:auto; background:#fff; border-radius:18px; padding:18px; box-shadow: var(--shadow); }
   .modalTitle{ font-weight:900; color:#0f172a; font-size:18px; margin-bottom:4px; }
   .modalSub{ font-size:13px; font-weight:700; color:#6b7280; margin-bottom:12px; }
@@ -200,6 +202,9 @@
     <div id="mainCards">
     <div class="banner" id="qrHint" style="display:none;"></div>
 
+    <!-- มือถือที่เข้าสู่ระบบแล้ว: ปุ่มตอกบัตร ยอด และขอเบิกของเจ้าของ อยู่บนหน้าหลักเลย -->
+    <div class="card mePanel" id="mePanel" style="display:none;"></div>
+
     <div class="card" id="msgCard" style="display:none;">
       <div class="cardTitle" data-t="todayTitle">📌 วันนี้</div>
       <div class="msgList" id="msgList"></div>
@@ -214,7 +219,7 @@
       <button class="moreBtn" id="weekMore" onclick="toggleWeek()"></button>
     </div>
 
-    <div class="card">
+    <div class="card" id="staffCard">
       <div class="cardTitle" data-t="staffTitle">พนักงาน</div>
       <div class="cardHint" data-t="staffHint">กดที่ชื่อของคุณ แล้วใส่ PIN</div>
       <div class="pills" id="pills"></div>
@@ -253,9 +258,9 @@
     <div class="result" id="punchResult"></div>
     <div class="msgList" id="punchMsgs" style="margin-top:10px;"></div>
     <div class="myBox" id="dutyBox" style="display:none;"></div>
-    <button class="myBtn" onclick="openMy()" data-t="myButton">💵 เบิกเงิน / ดูยอดของฉัน</button>
+    <button class="myBtn" id="myBtn" onclick="openMy()" data-t="myButton">💵 เบิกเงิน / ดูยอดของฉัน</button>
     <div class="myBox" id="myBox" style="display:none;"></div>
-    <button class="btn btnClose" onclick="closePunch()" data-t="close">ปิด</button>
+    <button class="btn btnClose" id="closeBtn" onclick="closePunch()" data-t="close">ปิด</button>
     <div class="fine" data-t="fineprint">* ระบบบันทึกเวลาตามเวลาของร้าน พนักงานแก้เวลาเองไม่ได้</div>
     <div class="fine" id="privacyNote" data-t="privacy" style="display:none;">ระบบเก็บตำแหน่งและรูปถ่ายตอนตอกบัตร เพื่อยืนยันการเข้างานเท่านั้น</div>
   </div>
@@ -380,6 +385,7 @@
       ME_ID = j.me || null;
       QR_REQUIRED = !!j.qr_required;
       applyBoot(j);
+      layoutForMe();
       if (scanCode() && !j.qr_ok){ ssSet("clock_scan", ""); showBanner(t("qrOld")); } // QR เก่า (แอดมินเปลี่ยนแล้ว)
       else if (scanCode() && j.qr_required && !j.qr_here){ ssSet("clock_scan", ""); showBanner(t("ipNotAllowed")); } // สแกนแต่ไม่ได้ต่อ WiFi ร้าน
       updateQrGate();
@@ -436,7 +442,7 @@
     await bootstrap();
     await loadToday();
     const mine = ((currentBranch() || {}).staff || []);
-    if (mine.length === 1) openPunch(mine[0]);
+    if (mine.length === 1 && !isInline()) openPunch(mine[0]); // หน้าหลักแสดงของคนนี้อยู่แล้ว
   }
 
   async function staffLogout(){
@@ -544,6 +550,7 @@
   }
 
   function renderAll(){
+    if (typeof renderMeTitle === "function") renderMeTitle();
     renderMessages(document.getElementById("msgList"), messages, null);
     document.getElementById("msgCard").style.display = messages.length ? "" : "none";
     renderPills();
@@ -639,8 +646,43 @@
     document.getElementById("myBox").style.display = "none";
     document.getElementById("dutyBox").style.display = "none";
     if (needGps) startGps(b);
+    if (isInline()){ renderMeTitle(); return; }
     document.getElementById("punchOverlay").classList.add("show");
     setTimeout(() => document.getElementById("pinInput").focus(), 50);
+  }
+
+  // ---------- หน้าหลักของมือถือที่เข้าสู่ระบบแล้ว ----------
+  // ย้ายกล่องตอกบัตร (ตัวเดียวกับหน้าต่างที่เด้งตอนกดชื่อ) มาไว้บนหน้าหลัก ฟังก์ชันเดิมทำงานเหมือนเดิมทุกอย่าง
+  const punchModal = document.querySelector("#punchOverlay .modal");
+  function isInline(){ return !!(punchModal.parentElement && punchModal.parentElement.id === "mePanel"); }
+
+  function renderMeTitle(){
+    if (!isInline() || !current) return;
+    const title = document.getElementById("punchName");
+    title.textContent = current.label;
+    const st = stateOf(current.id);
+    const tag = el("span", "meState");
+    tag.appendChild(el("span", "dot " + st));
+    tag.appendChild(document.createTextNode(t(st)));
+    title.appendChild(tag);
+  }
+
+  function layoutForMe(){
+    const me = ME_ID ? ((currentBranch() || {}).staff || []).find(x => x.id === ME_ID) : null;
+    const panel = document.getElementById("mePanel");
+    document.getElementById("staffCard").style.display = me ? "none" : "";
+    document.getElementById("closeBtn").style.display = me ? "none" : "";
+    document.getElementById("myBtn").style.display = me ? "none" : "";
+    panel.style.display = me ? "" : "none";
+    if (me){
+      const fresh = !isInline() || !current || current.id !== me.id;
+      if (!isInline()) panel.appendChild(punchModal);
+      if (fresh){ openPunch(me); openMy(true); }
+      else renderMeTitle();
+    } else if (isInline()){
+      document.getElementById("punchOverlay").appendChild(punchModal);
+      stopGps(); current = null;
+    }
   }
 
   function closePunch(){
@@ -806,6 +848,7 @@
     // หลังเข้างาน โชว์ข้อความของวันนี้ ไฮไลต์เวรของคนนี้ และเวรที่จะถึง
     if (type === "in") renderMessages(document.getElementById("punchMsgs"), messages, j.staff_name);
     renderDuties(j.my_duties);
+    if (isInline()) openMy(true); // ยอดของฉันอัปเดตทันที
   }
 
 
@@ -955,13 +998,14 @@
     return row;
   }
 
-  async function openMy(){
+  // quiet = โหลดยอดใหม่เงียบๆ (หลังตอกบัตร) ไม่ลบข้อความผลการตอก
+  async function openMy(quiet){
     if (!current) return;
     const pin = document.getElementById("pinInput").value.trim();
-    if (needPin() && !/^\d{4,6}$/.test(pin)){ setResult(t("pinInvalid"), "err"); document.getElementById("pinInput").focus(); return; }
-    setResult("", "");
+    if (needPin() && !/^\d{4,6}$/.test(pin)){ if (quiet) return; setResult(t("pinInvalid"), "err"); document.getElementById("pinInput").focus(); return; }
+    if (!quiet) setResult("", "");
     const j = await api({ action: "my_summary", key: KEY, staff_id: current.id, pin, lang });
-    if (!j || !j.ok){ setResult(errorText(j), "err"); return; }
+    if (!j || !j.ok){ if (!quiet) setResult(errorText(j), "err"); return; }
     renderMy(j, pin);
     renderMyShifts(j.my_shifts);
     renderDuties(j.my_duties);
