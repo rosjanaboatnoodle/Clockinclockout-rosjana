@@ -894,7 +894,7 @@
       row.appendChild(el("div", "weekDay", dayLabel(d.date)));
       const items = el("div", "weekItems");
       if (d.shift){ const g = el("span", "tag", d.shift.name + " " + d.shift.start + "–" + d.shift.end); g.style.background = d.shift.color || "#6366f1"; items.appendChild(g); }
-      else items.appendChild(el("span", "weekNone", d.off ? t("dayOff") : t("noShiftSet")));
+      else items.appendChild(el("span", "weekNone", d.closed ? t("shopClosed") : d.off ? t("dayOff") : t("noShiftSet")));
       row.appendChild(items);
       wrap.appendChild(row);
     });

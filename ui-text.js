@@ -142,6 +142,7 @@
     onTime: "ตรงเวลา",
     earlyLeave: "กลับก่อนเวลา {m} นาที",
     myShiftsTitle: "🕘 กะของฉัน 7 วัน",
+    shopClosed: "🏖️ ร้านหยุด",
     dayOff: "หยุด",
     noShiftSet: "ยังไม่ได้กำหนดกะ",
     lateTimes: "มาสาย (ครั้ง)",

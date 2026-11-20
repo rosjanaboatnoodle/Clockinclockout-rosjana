@@ -1026,7 +1026,7 @@ async function publicPunches(branchId: string, punches: Punch[]) {
     const sc = await loadShiftContext(branchId, staffIds, date, date, []);
     for (const r of open) {
       const rules = effectivePay(b?.pay_defaults, (people ?? []).find((x) => x.id === r.staff_id)?.pay);
-      const { shift } = resolveShift(rules, sc.shifts, sc.rosterMap.has(`${r.staff_id}|${r.work_date}`) ? sc.rosterMap.get(`${r.staff_id}|${r.work_date}`) : undefined,
+      const { shift } = resolveShift(rules, sc.shifts, rosterFor(sc, r.staff_id, r.work_date),
         r.work_date, Date.parse(r.check_in), (r as PunchRow).shift_override);
       if ((shift?.break_mode ?? rules.break_mode) === "punch") breakPunch.add(r.id);
     }
@@ -1383,7 +1383,7 @@ const AUTO_SHIFT_WINDOW_MIN = 240; // the guessed shift must start within 4 hour
 // Which shift a person works on a date. Order: admin's pick for that day → weekly roster
 // → weekday pattern → their usual shift → guess from the clock-in time → none.
 function resolveShift(
-  rules: Pay, shifts: Shift[], rosterShift: number | null | undefined, date: string,
+  rules: Pay, shifts: Shift[], rosterShift: number | null | undefined | "holiday", date: string,
   firstIn: number | null, override: number | null | undefined,
 ): { shift: Shift | null; source: string } {
   const byId = (id: unknown) => shifts.find((s) => s.id === Number(id)) ?? null;
@@ -1391,6 +1391,7 @@ function resolveShift(
     return Number(override) === -1 ? { shift: null, source: "admin_none" } : { shift: byId(override), source: "admin" };
   }
   if (rules.work_mode !== "shift") return { shift: null, source: "none" };
+  if (rosterShift === "holiday") return { shift: null, source: "holiday_off" };
   if (rosterShift !== undefined) return rosterShift === null ? { shift: null, source: "roster_off" } : { shift: byId(rosterShift), source: "roster" };
   const nearest = (): Shift | null => {
     if (!rules.auto_shift || firstIn === null) return null;
@@ -1511,6 +1512,13 @@ function computeDay(
 }
 
 // Shifts, roster and breaks a set of days needs.
+// The roster value for resolveShift: the admin's pick for that day, else "holiday" when the shop is closed.
+function rosterFor(sc: { rosterMap: Map<string, number | null>; holidays?: Set<string> }, staffId: number, date: string): number | null | undefined | "holiday" {
+  const k = `${staffId}|${date}`;
+  if (sc.rosterMap.has(k)) return sc.rosterMap.get(k);
+  return sc.holidays?.has(date) ? "holiday" : undefined;
+}
+
 async function loadShiftContext(branchId: string, staffIds: number[], from: string, to: string, punchIds: number[]) {
   const [{ data: shifts }, { data: roster }, { data: breaks }] = await Promise.all([
     supabase.from("shifts").select("*").eq("branch_id", branchId).order("sort").order("start_time"),
@@ -1519,7 +1527,12 @@ async function loadShiftContext(branchId: string, staffIds: number[], from: stri
   ]);
   const rosterMap = new Map<string, number | null>();
   for (const r of (roster ?? []) as Array<{ staff_id: number; date: string; shift_id: number | null }>) rosterMap.set(`${r.staff_id}|${r.date}`, r.shift_id);
-  return { shifts: (shifts ?? []) as Shift[], rosterMap, breaks: (breaks ?? []) as BreakRow[] };
+  // shop closed on these days ("holiday" in the calendar); nothing if the calendar isn't installed
+  const holidays = new Set<string>();
+  const { data: hol, error: holErr } = await supabase.from("schedule_entries").select("date")
+    .eq("branch_id", branchId).eq("topic_id", "holiday").gte("date", from).lte("date", to);
+  if (!holErr) for (const h of hol ?? []) holidays.add(String(h.date));
+  return { shifts: (shifts ?? []) as Shift[], rosterMap, breaks: (breaks ?? []) as BreakRow[], holidays };
 }
 
 // One day for one person, with the shift worked out.
@@ -1527,7 +1540,7 @@ function computeStaffDay(rules: Pay, staffId: number, date: string, punches: Pun
   const firstIn = punches.length ? Math.min(...punches.map((p) => Date.parse(p.check_in))) : null;
   const override = punches.find((p) => p.shift_override !== null && p.shift_override !== undefined)?.shift_override;
   const key = `${staffId}|${date}`;
-  const { shift, source } = resolveShift(rules, sc.shifts, sc.rosterMap.has(key) ? sc.rosterMap.get(key) : undefined, date, firstIn, override);
+  const { shift, source } = resolveShift(rules, sc.shifts, rosterFor(sc, staffId, date), date, firstIn, override);
   return computeDay(rules, punches, date, { shift, shiftSource: source, breaks: sc.breaks });
 }
 
@@ -2112,14 +2125,14 @@ async function handleGetRoster(p: Record<string, unknown>) {
     const rules = effectivePay(b.pay_defaults, person.pay);
     for (let d = from; d <= to; d = addDays(d, 1)) {
       const k = `${person.id}|${d}`;
-      const r = resolveShift(rules, sc.shifts, sc.rosterMap.has(k) ? sc.rosterMap.get(k) : undefined, d, null, undefined);
+      const r = resolveShift(rules, sc.shifts, rosterFor(sc, person.id, d), d, null, undefined);
       cells[k] = { shift_id: r.shift?.id ?? null, source: r.source, set: sc.rosterMap.has(k) };
     }
   }
   return json({
     ok: true,
     staff: people.map((x) => ({ id: x.id, label: x.label || x.name, work_mode: effectivePay(b.pay_defaults, x.pay).work_mode })),
-    shifts: sc.shifts.filter((x) => x.active), cells,
+    shifts: sc.shifts.filter((x) => x.active), cells, holidays: [...sc.holidays],
   });
 }
 
@@ -2157,8 +2170,8 @@ async function myShifts(b: BranchFull, s: StaffFull) {
   const out = [];
   for (let d = today; d <= to; d = addDays(d, 1)) {
     const k = `${s.id}|${d}`;
-    const r = resolveShift(rules, sc.shifts, sc.rosterMap.has(k) ? sc.rosterMap.get(k) : undefined, d, null, undefined);
-    out.push({ date: d, shift: r.shift ? { name: r.shift.name, start: r.shift.start_time, end: r.shift.end_time, color: r.shift.color } : null, off: r.source.endsWith("_off") });
+    const r = resolveShift(rules, sc.shifts, rosterFor(sc, s.id, d), d, null, undefined);
+    out.push({ date: d, shift: r.shift ? { name: r.shift.name, start: r.shift.start_time, end: r.shift.end_time, color: r.shift.color } : null, off: r.source.endsWith("_off"), closed: r.source === "holiday_off" });
   }
   return out;
 }
@@ -2464,7 +2477,7 @@ async function handleCronTick(p: Record<string, unknown>) {
     const shiftOf = (s: { id: number; pay: Record<string, unknown> }, date: string, firstIn: number | null, override?: number | null) => {
       const rules = effectivePay(b.pay_defaults, s.pay);
       const k = `${s.id}|${date}`;
-      return { rules, r: resolveShift(rules, sc.shifts, sc.rosterMap.has(k) ? sc.rosterMap.get(k) : undefined, date, firstIn, override) };
+      return { rules, r: resolveShift(rules, sc.shifts, rosterFor(sc, s.id, date), date, firstIn, override) };
     };
 
     for (const s of people) {

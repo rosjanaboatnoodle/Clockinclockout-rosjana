@@ -216,7 +216,7 @@
         <span class="sub" id="rosterRange" style="flex:1; text-align:center;"></span>
         <button class="btn" onclick="shiftWeek(7)">สัปดาห์ถัดไป ›</button>
       </div>
-      <div class="hint">ตัวหนา/กรอบม่วง = จัดเองในตาราง · ตัวปกติ = ตามกะประจำ/กะตามวัน · เลือก "ตามปกติ" เพื่อยกเลิกที่จัดเอง</div>
+      <div class="hint">🏖️ = วันหยุดร้านจากปฏิทิน ทุกคนหยุดอัตโนมัติ (ถ้าวันนั้นจะให้ใครมาทำงาน เลือกกะให้คนนั้นในตารางได้) · ตัวหนา/กรอบม่วง = จัดเองในตาราง · ตัวปกติ = ตามกะประจำ/กะตามวัน · เลือก "ตามปกติ" เพื่อยกเลิกที่จัดเอง</div>
       <div class="hint">คนที่ขึ้นว่า "ยังไม่ได้ตั้ง มีกะ": ไปที่แท็บเงิน → เวลางาน = "มีกะ" (ทั้งสาขา) หรือแท็บพนักงาน → 💰 (รายคน) แล้วเลือกกะประจำ</div>
       <div class="tableWrap"><table class="roster" id="rosterTable"></table></div>
       <div class="status" id="rosterStatus"></div>
@@ -1756,7 +1756,8 @@
     const today = localDateStr(new Date());
     for (let i = 0; i < 7; i++){
       const d = addD(rosterStart, i);
-      head.appendChild(el("th", d === today ? "today" : "", WD_SHORT[i] + " " + Number(d.slice(8))));
+      const closed = (j.holidays || []).includes(d);
+      head.appendChild(el("th", d === today ? "today" : "", WD_SHORT[i] + " " + Number(d.slice(8)) + (closed ? " 🏖️" : "")));
     }
     t.appendChild(head);
     const nameOf = id => { const x = j.shifts.find(s => s.id === id); return x ? x.name : ""; };
@@ -1770,7 +1771,7 @@
         const c = j.cells[person.id + "|" + d] || {};
         const td = el("td", d === today ? "today" : "");
         const sel = el("select", c.set ? "set" : "");
-        const usual = c.set ? "ตามปกติ" : (c.shift_id ? nameOf(c.shift_id) : (String(c.source).endsWith("_off") ? "หยุด" : "—"));
+        const usual = c.set ? "ตามปกติ" : (c.shift_id ? nameOf(c.shift_id) : (c.source === "holiday_off" ? "🏖️ ร้านหยุด" : String(c.source).endsWith("_off") ? "หยุด" : "—"));
         const o0 = el("option", "", c.set ? "↺ ตามปกติ" : usual); o0.value = "clear"; sel.appendChild(o0);
         j.shifts.forEach(sh => { const o = el("option", "", sh.name); o.value = String(sh.id); sel.appendChild(o); });
         const off = el("option", "", "หยุด"); off.value = "off"; sel.appendChild(off);
