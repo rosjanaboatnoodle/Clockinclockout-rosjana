@@ -51,6 +51,27 @@
   .evRow .nm{ flex:1; min-width:150px; font-weight:800; } .evRow .nm .sub{ font-weight:600; }
   .wkCell{ border:1px solid #e5e7eb; background:#fff; border-radius:8px; width:44px; height:34px; font-size:16px; cursor:pointer; }
   .evTotal{ margin-top:8px; padding:10px; border-radius:12px; background:#eef2ff; font-weight:900; }
+  .evPeople{ margin-bottom:10px; }
+  .evPeople .chip{ font-size:15px; padding:9px 14px; }
+  .evHead{ display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin:6px 0 8px; font-size:18px; }
+  .evPill{ font-size:12px; font-weight:900; border-radius:999px; padding:3px 10px; }
+  .evPill.todo{ background:#fef3c7; color:#92400e; } .evPill.done{ background:#d1fae5; color:#065f46; } .evPill.lock{ background:#e5e7eb; color:#374151; }
+  .evGrid{ display:grid; grid-template-columns: 1fr auto auto; gap:10px 12px; align-items:center; margin-top:12px; }
+  .evName{ font-weight:900; font-size:15px; }
+  .evMid{ display:flex; gap:6px; justify-content:flex-end; }
+  .evAuto{ font-size:13px; font-weight:800; color:#475569; background:#f1f5f9; border-radius:10px; padding:8px 10px; }
+  .evTap{ border:none; border-radius:10px; padding:8px 12px; font-size:15px; font-weight:900; cursor:pointer; min-width:58px; }
+  .evTap.up{ background:#d1fae5; color:#065f46; } .evTap.down{ background:#fee2e2; color:#991b1b; }
+  .evScore{ display:flex; gap:4px; }
+  .evLegend{ font-size:11.5px; color:#94a3b8; margin-top:6px; text-align:right; }
+  .evResult{ margin-top:12px; padding:14px; border-radius:14px; text-align:center; background:#eef2ff; }
+  .evResult.lv0{ background:#d1fae5; } .evResult.lv1{ background:#e0f2fe; } .evResult.lv2{ background:#fef3c7; } .evResult.lv3{ background:#fee2e2; }
+  .evBigScore{ font-size:22px; font-weight:900; } .evBonusLine{ font-size:15px; font-weight:800; margin-top:2px; }
+  .evSave{ width:100%; margin-top:10px; padding:13px; font-size:16px; }
+  .evDet{ margin-top:10px; } .evDet > summary{ cursor:pointer; font-weight:900; color:#475569; font-size:13.5px; padding:4px 0; }
+  .evKudo{ background:#fff7ed; border:1px solid #fed7aa; border-radius:12px; padding:10px; margin-bottom:8px; font-weight:800; font-size:13.5px; }
+  .evSetH{ font-weight:900; margin-top:12px; font-size:14px; }
+  @media (max-width:520px){ .evGrid{ grid-template-columns: 1fr auto; } .evScore{ grid-column: 1 / -1; justify-content:flex-end; margin-top:-6px; } }
   .staffCard{ border:1px solid #e5e7eb; border-radius:12px; padding:10px; margin-bottom:8px; }
   .staffCard.off{ opacity:.55; }
   .badge{ font-size:11px; font-weight:900; border-radius:999px; padding:2px 8px; }
@@ -340,68 +361,54 @@
       <div class="status" id="advSetStatus"></div>
     </div>
 
-    <!-- ประเมิน -->
+    <!-- ประเมิน (ทีละคน) -->
     <div class="card hidden" data-panel="eval" id="evOffCard">
-      <div class="cardTitle">📋 ประเมินประจำเดือน (ปิดอยู่)</div>
-      <div class="hint">จดบันทึก 👍/👎 ระหว่างเดือน → สิ้นเดือนระบบแนะนำคะแนนให้ → ระดับและโบนัสออกไปพร้อมบิลเงินเดือน (แปลภาษาพม่าให้) · เปิดใช้ได้ในการ์ด ⚙️ ตั้งค่าประเมิน ด้านล่าง</div>
+      <div class="cardTitle">📋 ประเมินประจำเดือน · ปิดอยู่</div>
+      <div class="hint">เปิดใช้ได้ที่ ⚙️ ตั้งค่าประเมิน ด้านล่าง</div>
     </div>
 
     <div class="card hidden" data-panel="eval" data-evon="1">
-      <div class="cardTitle">📝 จดด่วน</div>
-      <div class="hint">เลือกคน → เลือกเรื่อง → (พิมพ์ก็ได้ไม่พิมพ์ก็ได้) → กด 👍 หรือ 👎 · เด็กไม่เห็นบันทึกระหว่างเดือน</div>
-      <div class="chips" id="evPeople"></div>
-      <div class="chips" id="evCrits" style="margin-top:8px;"></div>
-      <div class="row"><input class="field" id="evNote" placeholder="เกิดอะไรขึ้น เช่น ช่วยเก็บโต๊ะโซนอื่นตอนลูกค้าเยอะ" maxlength="200"></div>
-      <div class="evBig"><button class="evUp" onclick="evQuick(1)">👍 ดี</button><button class="evDown" onclick="evQuick(-1)">👎 ต้องบอก</button></div>
-      <div class="status" id="evQuickStatus"></div>
-      <details style="margin-top:8px;"><summary class="hint" style="cursor:pointer; font-weight:900;">บันทึกล่าสุด</summary><div id="evRecent"></div></details>
-    </div>
-
-    <div class="card hidden" data-panel="eval" data-evon="1" id="evKudosCard">
-      <div class="cardTitle">💛 คำชมจากเพื่อน</div>
-      <div class="hint">เด็กชมกันเองได้อย่างเดียว ติไม่ได้ · เลือกว่าจะนับเป็น 👍 เรื่องไหน หรือกดข้าม</div>
       <div id="evKudos"></div>
+      <div class="chips evPeople" id="evPeople"></div>
+      <div id="evPerson"></div>
     </div>
 
     <div class="card hidden" data-panel="eval" data-evon="1">
-      <div class="cardTitle">📋 เช็คสัปดาห์นี้ (2 นาที)</div>
-      <div class="hint">กดช่องเพื่อสลับ – → 👍 → 👎 · ปล่อย – ถ้าปกติ · กดบันทึกทีเดียว</div>
-      <div class="tableWrap"><table id="evWeekly"></table></div>
-      <div class="row"><button class="btn dark" onclick="evWeeklySave()">บันทึกเช็คสัปดาห์นี้</button></div>
-      <div class="status" id="evWeeklyStatus"></div>
-    </div>
-
-    <div class="card hidden" data-panel="eval" data-evon="1">
-      <div class="cardTitle">🏁 สรุปรอบนี้ (ให้คะแนน + โบนัส)</div>
-      <div class="hint">ระบบแนะนำคะแนนจากบันทึกและการตอกบัตร (กรอบประ) กดเปลี่ยนได้ · ติ๊กบันทึกที่จะใส่เป็นเหตุผลในบิล · บันทึกแล้วโบนัสเข้ายอดเงินทันที · ปิดรอบแล้วแก้ไม่ได้</div>
-      <div class="row"><span class="hint" style="margin:0;">รอบที่มีวันที่</span><input class="field sm" id="evDate" type="date" style="min-width:150px;"><button class="btn" onclick="loadEvalMonth()">ดู</button></div>
-      <div id="evMonth"></div>
+      <details id="evWeeklyBox">
+        <summary class="cardTitle" style="cursor:pointer;">📋 เช็คทั้งร้าน (สัปดาห์ละครั้ง)</summary>
+        <div class="hint">กดช่อง: – → 👍 → 👎 · ปกติไม่ต้องกด</div>
+        <div class="tableWrap"><table id="evWeekly"></table></div>
+        <div class="row"><button class="btn dark" onclick="evWeeklySave()">บันทึก</button></div>
+        <div class="status" id="evWeeklyStatus"></div>
+      </details>
     </div>
 
     <div class="card hidden" data-panel="eval">
-      <div class="cardTitle">⚙️ ตั้งค่าประเมิน</div>
-      <label class="check"><input type="checkbox" id="evEnabled"> <b>ใช้ระบบประเมินในสาขานี้</b></label>
-      <div class="cardTitle" style="margin-top:10px; font-size:14px;">เกณฑ์ (ติ๊ก = ใช้ · แก้ชื่อได้)</div>
-      <div id="evCritEdit"></div>
-      <div class="row"><button class="btn" onclick="evAddCrit()">+ เพิ่มเกณฑ์</button></div>
-      <div class="cardTitle" style="margin-top:10px; font-size:14px;">วิธีนับคะแนน</div>
-      <div class="row"><span class="hint" style="margin:0;">ตรงเวลา: นับสายเมื่อเกิน</span><input class="field sm" id="evGrace" type="number" min="0"><span class="hint" style="margin:0;">นาที</span></div>
-      <div class="row"><span class="hint" style="margin:0;">ตรงเวลา: ได้ 3 ถ้าสาย+ขาดไม่เกิน</span><input class="field sm" id="evLate0" type="number" min="0"><span class="hint" style="margin:0;">ครั้ง · ได้ 2 ถ้าไม่เกิน</span><input class="field sm" id="evLate1" type="number" min="0"><span class="hint" style="margin:0;">ครั้ง · มากกว่านั้น 1</span></div>
-      <div class="row"><span class="hint" style="margin:0;">เกณฑ์อื่น (👎 − 👍): ได้ 3 ถ้าไม่เกิน</span><input class="field sm" id="evNote0" type="number" min="0"><span class="hint" style="margin:0;">· ได้ 2 ถ้าไม่เกิน</span><input class="field sm" id="evNote1" type="number" min="0"><span class="hint" style="margin:0;">· มากกว่านั้น 1</span></div>
-      <div class="cardTitle" style="margin-top:10px; font-size:14px;">ระดับ (คะแนนเทียบเต็ม 12) และโบนัส</div>
-      <div class="row"><span class="hint" style="margin:0;">คิดโบนัสแบบ</span>
-        <select class="field" id="evMode" onchange="evModeChange()"><option value="pct">% ของโบนัสเต็ม</option><option value="amount">ใส่ยอดเงินแต่ละระดับ</option></select></div>
-      <div id="evLevels"></div>
-      <label class="check"><input type="checkbox" id="evCap"> มีข้อไหนได้ 1 → สูงสุดแค่ "พอใช้"</label>
-      <div class="row" id="evBonusRow"><span class="hint" style="margin:0;">โบนัสเต็ม (บาท)</span><input class="field sm" id="evBonus" type="number" min="0"></div>
-      <div class="hint">ตอนสรุปรายคน แก้ยอดโบนัสเองได้เสมอ (ทับยอดที่ระบบคิด)</div>
-      <label class="check"><input type="checkbox" id="evShow"> แสดงผลประเมินในบิล (ค่าเริ่มต้น เปลี่ยนรายคนได้) · ไม่แสดง = บิลมีแค่บรรทัดโบนัส</label>
-      <label class="check"><input type="checkbox" id="evWeeklyOn"> แจ้งเตือนแอดมินให้เช็คสัปดาห์ละครั้ง</label>
-      <div class="row"><span class="hint" style="margin:0;">วัน</span><select class="field sm" id="evWDay"><option value="0">อาทิตย์</option><option value="1">จันทร์</option><option value="2">อังคาร</option><option value="3">พุธ</option><option value="4">พฤหัส</option><option value="5">ศุกร์</option><option value="6">เสาร์</option></select><span class="hint" style="margin:0;">ตั้งแต่กี่โมง</span><input class="field sm" id="evWHour" type="number" min="0" max="23"></div>
-      <label class="check"><input type="checkbox" id="evKudosOn"> ให้พนักงานชมเพื่อนได้ (ชมอย่างเดียว)</label>
-      <div class="row"><button class="btn dark" onclick="saveEvalSettings()">บันทึกตั้งค่าประเมิน</button></div>
-      <div class="hint">เปลี่ยนชื่อเกณฑ์แล้ว ไปที่แท็บภาษา → แปลส่วนที่ยังไม่แปล เพื่อให้ขึ้นภาษาพม่า</div>
-      <div class="status" id="evSetStatus"></div>
+      <details id="evSetBox">
+        <summary class="cardTitle" style="cursor:pointer;">⚙️ ตั้งค่าประเมิน</summary>
+        <label class="check"><input type="checkbox" id="evEnabled"> <b>ใช้ระบบประเมินในสาขานี้</b></label>
+        <div class="evSetH">เกณฑ์ (ติ๊ก = ใช้)</div>
+        <div id="evCritEdit"></div>
+        <div class="row"><button class="btn" onclick="evAddCrit()">+ เพิ่มเกณฑ์</button></div>
+        <div class="evSetH">นับคะแนน</div>
+        <div class="row"><span class="hint" style="margin:0;">นับว่าสายเมื่อเกิน</span><input class="field sm" id="evGrace" type="number" min="0"><span class="hint" style="margin:0;">นาที</span></div>
+        <div class="row"><span class="hint" style="margin:0;">ตรงเวลา (สาย+ขาด): 3 คะแนนถ้าไม่เกิน</span><input class="field sm" id="evLate0" type="number" min="0"><span class="hint" style="margin:0;">ครั้ง · 2 คะแนนถ้าไม่เกิน</span><input class="field sm" id="evLate1" type="number" min="0"></div>
+        <div class="row"><span class="hint" style="margin:0;">เรื่องอื่น (👎−👍): 3 คะแนนถ้าไม่เกิน</span><input class="field sm" id="evNote0" type="number" min="0"><span class="hint" style="margin:0;">· 2 คะแนนถ้าไม่เกิน</span><input class="field sm" id="evNote1" type="number" min="0"></div>
+        <div class="evSetH">ระดับและโบนัส</div>
+        <div class="row"><span class="hint" style="margin:0;">คิดโบนัสแบบ</span>
+          <select class="field" id="evMode" onchange="evModeChange()"><option value="pct">% ของโบนัสเต็ม</option><option value="amount">ใส่ยอดเงินแต่ละระดับ</option></select></div>
+        <div id="evLevels"></div>
+        <div class="row" id="evBonusRow"><span class="hint" style="margin:0;">โบนัสเต็ม (บาท)</span><input class="field sm" id="evBonus" type="number" min="0"></div>
+        <label class="check"><input type="checkbox" id="evCap"> มีข้อไหนได้ 1 → สูงสุดแค่ "พอใช้"</label>
+        <label class="check"><input type="checkbox" id="evShow"> แสดงผลประเมินในบิล (ไม่แสดง = บิลมีแค่บรรทัดโบนัส)</label>
+        <div class="evSetH">อื่นๆ</div>
+        <label class="check"><input type="checkbox" id="evKudosOn"> ให้พนักงานชมเพื่อนได้ (ชมอย่างเดียว)</label>
+        <label class="check"><input type="checkbox" id="evWeeklyOn"> แจ้งเตือนให้เช็คทั้งร้านสัปดาห์ละครั้ง</label>
+        <div class="row"><span class="hint" style="margin:0;">วัน</span><select class="field sm" id="evWDay"><option value="0">อาทิตย์</option><option value="1">จันทร์</option><option value="2">อังคาร</option><option value="3">พุธ</option><option value="4">พฤหัส</option><option value="5">ศุกร์</option><option value="6">เสาร์</option></select><span class="hint" style="margin:0;">กี่โมง</span><input class="field sm" id="evWHour" type="number" min="0" max="23"></div>
+        <div class="row"><button class="btn dark" onclick="saveEvalSettings()">บันทึกตั้งค่า</button></div>
+        <div class="hint">เปลี่ยนชื่อเกณฑ์แล้ว ไปแท็บภาษา → แปลส่วนที่ยังไม่แปล</div>
+        <div class="status" id="evSetStatus"></div>
+      </details>
     </div>
 
     <!-- ลา -->
@@ -807,24 +814,24 @@
     loadStaff().then(() => { loadPunches(); loadReview(); loadPaySettings(); loadAccess(); loadNotify(); loadQr(); loadLeaves(); loadEvalBadge(); });
   }
 
-  // ---------- ประเมิน ----------
-  let evCfg = null, evLevelsTh = ["ดีมาก", "ดี", "พอใช้", "ต้องปรับปรุง"], evNotesAll = [];
-  const evSel = { staff: null, crit: null };
+  // ---------- ประเมิน (ทีละคน) ----------
+  let evCfg = null, evLevelsTh = ["ดีมาก", "ดี", "พอใช้", "ต้องปรับปรุง"], evNotesAll = [], evPeople = [], evPick = null;
+  const evDraft = {}; // ที่เลือกไว้แต่ยังไม่บันทึก ต่อคน (กด 👍/👎 แล้วหน้าโหลดใหม่ จะได้ไม่หาย)
   const evOnCrits = () => (evCfg ? evCfg.criteria.filter(c => c.on) : []);
+  const evShortDate = d => { try{ return new Date(d + "T00:00:00").toLocaleDateString("th-TH", { day: "numeric", month: "short" }); } catch(e){ return d; } };
 
   async function loadEval(){
     const want = branchId;
     const j = await api({ action: "eval_settings", admin_pin: adminPin, branch_id: branchId });
     if (want !== branchId) return;
-    if (!j || !j.ok){ setMsg("evSetStatus", j && j.error === "need_migration_0011" ? "ต้องรันไฟล์ 0011_eval.sql ใน Supabase ก่อน" : errText(j), false); return; }
+    if (!j || !j.ok){ $("evSetBox").open = true; setMsg("evSetStatus", j && j.error === "need_migration_0011" ? "ต้องรันไฟล์ 0011_eval.sql ใน Supabase ก่อน" : errText(j), false); return; }
     evCfg = j.eval; evLevelsTh = j.levels || evLevelsTh;
     fillEvalSettings();
     showEvalCards();
-    if (evCfg.enabled){
-      renderEvQuick(); await loadEvNotes(); renderEvWeekly();
-      if (!$("evDate").value) $("evDate").value = localDateStr(new Date());
-      loadEvalMonth();
-    }
+    if (!evCfg.enabled){ $("evSetBox").open = true; return; }
+    await loadEvalMonth();
+    loadEvNotes();
+    renderEvWeekly();
   }
 
   function showEvalCards(){
@@ -832,83 +839,213 @@
     const on = !!(evCfg && evCfg.enabled);
     $("evOffCard").classList.toggle("hidden", !tabOn || on);
     document.querySelectorAll('[data-evon="1"]').forEach(c => c.classList.toggle("hidden", !tabOn || !on));
-    if (tabOn && on) $("evKudosCard").classList.toggle("hidden", !evNotesAll.some(n => n.source === "kudos" && n.status === "new"));
   }
 
   function critName(id){ const c = evCfg && evCfg.criteria.find(x => x.id === id); return c ? c.th : id; }
 
-  // ตัวเลขคำชมจากเพื่อนที่ยังไม่ได้จัดการ บนแท็บประเมิน
   async function loadEvalBadge(){
     const j = await api({ action: "eval_notes", admin_pin: adminPin, branch_id: branchId });
     const n = (j && j.ok) ? j.notes.filter(x => x.source === "kudos" && x.status === "new").length : 0;
     $("evCount").textContent = n; $("evCount").classList.toggle("hidden", !n);
   }
 
-  function renderEvQuick(){
-    const pp = $("evPeople"); pp.innerHTML = "";
-    staffAll.filter(s => s.active).forEach(s => {
-      const c = el("button", "chip" + (evSel.staff === s.id ? " on" : ""), s.label || s.name);
-      c.onclick = () => { evSel.staff = s.id; renderEvQuick(); };
-      pp.appendChild(c);
-    });
-    const cc = $("evCrits"); cc.innerHTML = "";
-    evOnCrits().forEach(c => {
-      const b = el("button", "chip" + (evSel.crit === c.id ? " on" : ""), c.th);
-      b.onclick = () => { evSel.crit = c.id; renderEvQuick(); };
-      cc.appendChild(b);
-    });
-  }
-
-  async function evQuick(sign){
-    if (!evSel.staff){ setMsg("evQuickStatus", "เลือกคนก่อน", false); return; }
-    if (!evSel.crit){ setMsg("evQuickStatus", "เลือกเรื่องก่อน", false); return; }
-    const j = await api({ action: "eval_note", admin_pin: adminPin, branch_id: branchId, staff_id: evSel.staff, crit: evSel.crit, sign, note: $("evNote").value.trim() });
-    if (!j || !j.ok){ setMsg("evQuickStatus", errText(j), false); return; }
-    $("evNote").value = "";
-    setMsg("evQuickStatus", "บันทึกแล้ว " + (sign > 0 ? "👍 " : "👎 ") + staffName(evSel.staff) + " · " + critName(evSel.crit), true);
-    await loadEvNotes(); loadEvalMonth();
-  }
-
+  // คำชมจากเพื่อน: แถบเล็กๆ ด้านบน เฉพาะตอนมี
   async function loadEvNotes(){
     const j = await api({ action: "eval_notes", admin_pin: adminPin, branch_id: branchId });
     evNotesAll = (j && j.ok) ? j.notes : [];
-    const box = $("evRecent"); box.innerHTML = "";
-    const list = evNotesAll.filter(n => n.status === "ok" && n.crit).slice(0, 30);
-    if (!list.length) box.appendChild(el("div", "hint", "ยังไม่มีบันทึก"));
-    list.forEach(n => {
-      const r = el("div", "advRow");
-      r.appendChild(el("span", "", (n.sign > 0 ? "👍 " : "👎 ") + staffName(n.staff_id) + " · " + critName(n.crit) + (n.note ? " · " + n.note : "") + " · " + fmtD(n.date) + (n.source === "weekly" ? " (เช็คสัปดาห์)" : n.source === "kudos" ? " (เพื่อนชม)" : "")));
-      const x = el("button", "btn", "ลบ");
-      x.onclick = async () => { if (!confirm("ลบบันทึกนี้?")) return; await api({ action: "eval_note_update", admin_pin: adminPin, id: n.id, delete: true }); loadEvNotes(); loadEvalMonth(); };
-      r.appendChild(x); box.appendChild(r);
-    });
-    // คำชมจากเพื่อนที่ยังไม่ได้จัดการ
     const kb = $("evKudos"); kb.innerHTML = "";
     const kud = evNotesAll.filter(n => n.source === "kudos" && n.status === "new");
     $("evCount").textContent = kud.length; $("evCount").classList.toggle("hidden", !kud.length);
     kud.forEach(n => {
-      const card = el("div", "staffCard");
-      card.appendChild(el("b", "", "💛 " + staffName(n.from_staff_id) + " ชม " + staffName(n.staff_id)));
-      card.appendChild(el("div", "hint", "“" + n.note + "” · " + fmtD(n.date)));
-      const r = el("div", "row");
+      const bar = el("div", "evKudo");
+      bar.appendChild(el("div", "", "💛 " + staffName(n.from_staff_id) + " ชม " + staffName(n.staff_id) + ": “" + n.note + "”"));
+      const r = el("div", "row"); r.style.margin = "6px 0 0";
       const sel = el("select", "field sm");
       evOnCrits().filter(c => c.id !== "punctual").forEach(c => { const o = el("option", "", c.th); o.value = c.id; sel.appendChild(o); });
       const ok = el("button", "btn green", "นับเป็น 👍");
       ok.onclick = async () => { await api({ action: "eval_note_update", admin_pin: adminPin, id: n.id, crit: sel.value }); loadEvNotes(); loadEvalMonth(); };
       const no = el("button", "btn", "ข้าม");
       no.onclick = async () => { await api({ action: "eval_note_update", admin_pin: adminPin, id: n.id, dismiss: true }); loadEvNotes(); };
-      r.append(sel, ok, no); card.appendChild(r); kb.appendChild(card);
+      r.append(sel, ok, no); bar.appendChild(r); kb.appendChild(bar);
     });
-    showEvalCards();
   }
 
-  // เช็คสัปดาห์: ตาราง คน × เกณฑ์ (ไม่รวมตรงเวลาที่ระบบนับเอง)
+  async function loadEvalMonth(){
+    const j = await api({ action: "eval_month", admin_pin: adminPin, branch_id: branchId });
+    if (!j || !j.ok){ $("evPerson").innerHTML = ""; $("evPerson").appendChild(el("div", "status", errText(j))); return; }
+    evCfg = j.eval; evPeople = j.people;
+    if (!evPeople.some(p => p.staff_id === evPick)) evPick = evPeople.length ? evPeople[0].staff_id : null;
+    renderEvPeople(); renderEvPerson();
+  }
+
+  function renderEvPeople(){
+    const box = $("evPeople"); box.innerHTML = "";
+    evPeople.forEach(p => {
+      const c = el("button", "chip" + (p.staff_id === evPick ? " on" : ""), p.label + (p.locked ? " 🔒" : p.saved ? " ✅" : ""));
+      c.onclick = () => { evPick = p.staff_id; renderEvPeople(); renderEvPerson(); };
+      box.appendChild(c);
+    });
+  }
+
+  function evScoresOf(p){
+    const d = evDraft[p.staff_id] || (evDraft[p.staff_id] = { picked: {} });
+    const out = {};
+    evOnCrits().forEach(c => {
+      const sg = (p.suggest[c.id] || {}).score || 3;
+      out[c.id] = d.picked[c.id] || (p.saved && p.saved.scores && p.saved.scores[c.id]) || sg;
+    });
+    return out;
+  }
+
+  function renderEvPerson(){
+    const box = $("evPerson"); box.innerHTML = "";
+    const p = evPeople.find(x => x.staff_id === evPick);
+    if (!p){ box.appendChild(el("div", "hint", "ยังไม่มีพนักงาน")); return; }
+    const d = evDraft[p.staff_id] || (evDraft[p.staff_id] = { picked: {} });
+    const saved = p.saved;
+    const scores = evScoresOf(p);
+
+    const head = el("div", "evHead");
+    head.appendChild(el("b", "", p.label));
+    head.appendChild(el("span", "hint", evShortDate(p.period.start) + " – " + evShortDate(p.period.end)));
+    head.appendChild(el("span", "evPill " + (p.locked ? "lock" : saved ? "done" : "todo"), p.locked ? "🔒 ปิดรอบแล้ว" : saved ? "✅ บันทึกแล้ว" : "ยังไม่สรุป"));
+    box.appendChild(head);
+
+    if (!p.locked){
+      const note = el("input", "field"); note.id = "evNoteIn"; note.placeholder = "เกิดอะไรขึ้น (ไม่ใส่ก็ได้) แล้วกด 👍 / 👎 ด้านล่าง"; note.maxLength = 200;
+      note.value = d.note || ""; note.oninput = () => { d.note = note.value; };
+      box.appendChild(note);
+    }
+
+    const grid = el("div", "evGrid");
+    evOnCrits().forEach(c => {
+      const sg = p.suggest[c.id] || { score: 3, down: 0, up: 0 };
+      grid.appendChild(el("div", "evName", c.th));
+      const mid = el("div", "evMid");
+      if (c.id === "punctual"){
+        mid.appendChild(el("span", "evAuto", "สาย " + (sg.late || 0) + " · ขาด " + (sg.absent || 0)));
+      } else {
+        const up = el("button", "evTap up", "👍 " + sg.up), dn = el("button", "evTap down", "👎 " + sg.down);
+        up.disabled = dn.disabled = p.locked;
+        up.onclick = () => evTap(p.staff_id, c.id, 1);
+        dn.onclick = () => evTap(p.staff_id, c.id, -1);
+        mid.append(up, dn);
+      }
+      grid.appendChild(mid);
+      const sc = el("div", "evScore");
+      [1, 2, 3].forEach(v => {
+        const b = el("button", "sbtn" + (scores[c.id] === v ? " on" : "") + (sg.score === v ? " sug" : ""), String(v));
+        b.disabled = p.locked;
+        b.onclick = () => { d.picked[c.id] = v; renderEvPerson(); };
+        sc.appendChild(b);
+      });
+      grid.appendChild(sc);
+    });
+    box.appendChild(grid);
+    box.appendChild(el("div", "evLegend", "กรอบประ = ระบบแนะนำ · กดตัวเลขเพื่อเปลี่ยน"));
+
+    // ผลรวม + โบนัส
+    const on = evOnCrits();
+    const total = on.reduce((m, c) => m + (scores[c.id] || 0), 0);
+    const max = on.length * 3 || 12;
+    const scaled = Math.round(total * 12 / max);
+    let lv = evCfg.level_min.findIndex(m => scaled >= m); if (lv < 0) lv = 3;
+    if (evCfg.cap_if_one && on.some(c => scores[c.id] === 1) && lv < 2) lv = 2;
+    const amtMode = evCfg.bonus_mode === "amount";
+    if (d.bonusOn === undefined) d.bonusOn = saved ? saved.bonus_on : true;
+    if (d.show === undefined) d.show = saved ? saved.show : evCfg.show_on_bill;
+    if (d.max === undefined) d.max = saved ? saved.bonus_max : evCfg.bonus_max;
+    const autoBonus = amtMode ? (evCfg.level_amount || [0, 0, 0, 0])[lv] : Math.round(Number(d.max || 0) * evCfg.level_pct[lv] / 100);
+    if (d.own === undefined) d.own = saved && saved.bonus_on && Number(saved.bonus) !== autoBonus ? String(saved.bonus) : "";
+    const bonus = !d.bonusOn ? 0 : d.own !== "" ? Math.round(Number(d.own)) : autoBonus;
+
+    const res = el("div", "evResult lv" + lv);
+    res.appendChild(el("div", "evBigScore", total + "/" + max + " · " + evLevelsTh[lv]));
+    res.appendChild(el("div", "evBonusLine", "โบนัส " + bonus.toLocaleString("th-TH") + " ฿" + (d.own !== "" && d.bonusOn ? " (ใส่เอง)" : "") + (lv === 3 ? " · 💬 นัดคุยตัวต่อตัว" : "")));
+    box.appendChild(res);
+
+    const opts = el("div", "row");
+    const cb = (label, val, set) => { const l = el("label", "check"); const i = el("input"); i.type = "checkbox"; i.checked = val; i.disabled = p.locked; i.onchange = () => { set(i.checked); renderEvPerson(); }; l.append(i, document.createTextNode(" " + label)); return l; };
+    opts.appendChild(cb("ให้โบนัส", d.bonusOn, v => d.bonusOn = v));
+    if (!amtMode){
+      const mx = el("input", "field sm"); mx.type = "number"; mx.min = "0"; mx.value = d.max; mx.disabled = p.locked; mx.title = "โบนัสเต็ม";
+      mx.onchange = () => { d.max = Number(mx.value || 0); renderEvPerson(); };
+      opts.append(el("span", "hint", "เต็ม"), mx);
+    }
+    const own = el("input", "field sm"); own.type = "number"; own.min = "0"; own.placeholder = "ใส่ยอดเอง"; own.value = d.own; own.disabled = p.locked;
+    own.onchange = () => { d.own = own.value; renderEvPerson(); };
+    opts.appendChild(own);
+    opts.appendChild(cb("แสดงในบิล", d.show, v => d.show = v));
+    box.appendChild(opts);
+
+    // เหตุผลในบิล
+    const withText = p.notes.filter(n => n.note).sort((a, b) => b.sign - a.sign);
+    if (!d.reasons) d.reasons = new Set(((saved && saved.reasons) || []).map(r => r.id));
+    if (withText.length){
+      const det = el("details", "evDet");
+      det.appendChild(el("summary", "", "เหตุผลในบิล (" + d.reasons.size + "/" + Math.min(5, withText.length) + ")"));
+      withText.forEach(n => {
+        const l = el("label", "check"); const i = el("input"); i.type = "checkbox"; i.checked = d.reasons.has(n.id); i.disabled = p.locked;
+        i.onchange = () => { if (i.checked) d.reasons.add(n.id); else d.reasons.delete(n.id); det.querySelector("summary").textContent = "เหตุผลในบิล (" + d.reasons.size + "/" + Math.min(5, withText.length) + ")"; };
+        l.append(i, document.createTextNode(" " + (n.sign > 0 ? "👍 " : "👎 ") + n.note + " · " + evShortDate(n.date)));
+        det.appendChild(l);
+      });
+      box.appendChild(det);
+    }
+
+    const st = el("div", "status");
+    if (!p.locked){
+      const save = el("button", "btn green evSave", saved ? "บันทึกใหม่" : "บันทึกผลประเมิน");
+      save.onclick = async () => {
+        save.disabled = true; setMsg2(st, "กำลังบันทึก…");
+        const j = await api({ action: "eval_save", admin_pin: adminPin, staff_id: p.staff_id, date: p.period.start, scores,
+          bonus_on: d.bonusOn, bonus_max: Number(d.max || 0), bonus_amount: d.own === "" ? null : Number(d.own), show: d.show, reasons: [...d.reasons].slice(0, 5) });
+        save.disabled = false;
+        if (!j || !j.ok){ setMsg2(st, errText(j), false); return; }
+        delete evDraft[p.staff_id];
+        await loadEvalMonth();
+        const st2 = document.querySelector("#evPerson .status"); if (st2) setMsg2(st2, "บันทึกแล้ว · โบนัส " + Number(j.result.bonus).toLocaleString("th-TH") + " ฿ เข้ายอดเงินแล้ว", true);
+      };
+      box.appendChild(save);
+    }
+    box.appendChild(st);
+
+    // บันทึกทั้งหมดของคนนี้
+    const all = p.notes;
+    const det2 = el("details", "evDet");
+    det2.appendChild(el("summary", "", "บันทึกเดือนนี้ (" + all.length + ")"));
+    if (!all.length) det2.appendChild(el("div", "hint", "ยังไม่มี · ไม่มีบันทึก = ได้ 3"));
+    all.slice().reverse().forEach(n => {
+      const r = el("div", "advRow");
+      r.appendChild(el("span", "", (n.sign > 0 ? "👍 " : "👎 ") + critName(n.crit) + (n.note ? " · " + n.note : "") + " · " + evShortDate(n.date) + (n.source === "weekly" ? " · เช็คร้าน" : n.source === "kudos" ? " · เพื่อนชม" : "")));
+      if (!p.locked){
+        const x = el("button", "btn", "ลบ");
+        x.onclick = async () => { if (!confirm("ลบบันทึกนี้?")) return; await api({ action: "eval_note_update", admin_pin: adminPin, id: n.id, delete: true }); loadEvalMonth(); };
+        r.appendChild(x);
+      }
+      det2.appendChild(r);
+    });
+    box.appendChild(det2);
+  }
+
+  async function evTap(staffId, crit, sign){
+    const d = evDraft[staffId] || (evDraft[staffId] = { picked: {} });
+    const j = await api({ action: "eval_note", admin_pin: adminPin, branch_id: branchId, staff_id: staffId, crit, sign, note: (d.note || "").trim() });
+    if (!j || !j.ok){ alert(errText(j)); return; }
+    d.note = "";
+    delete d.picked[crit]; // คะแนนข้อนี้กลับไปใช้ที่ระบบแนะนำใหม่
+    await loadEvalMonth();
+  }
+
+  function setMsg2(e, text, ok){ e.textContent = text; e.style.color = ok ? "#047857" : (ok === false ? "#dc2626" : "#374151"); }
+
+  // เช็คทั้งร้าน: ตาราง คน × เรื่อง (ไม่รวมตรงเวลาที่ระบบนับเอง)
   let evWeek = {};
   function renderEvWeekly(){
     evWeek = {};
     const crits = evOnCrits().filter(c => c.id !== "punctual");
     const t = $("evWeekly"); t.innerHTML = "";
-    const head = el("tr"); head.appendChild(el("th", "", "พนักงาน"));
+    const head = el("tr"); head.appendChild(el("th", "", ""));
     crits.forEach(c => head.appendChild(el("th", "", c.th)));
     t.appendChild(head);
     staffAll.filter(s => s.active).forEach(s => {
@@ -927,117 +1064,11 @@
   }
   async function evWeeklySave(){
     const entries = Object.entries(evWeek).map(([k, sign]) => { const [sid, crit] = k.split("|"); return { staff_id: Number(sid), crit, sign }; });
-    if (!entries.length){ setMsg("evWeeklyStatus", "ไม่มีอะไรต้องบันทึก (ทุกคนปกติ)", true); return; }
+    if (!entries.length){ setMsg("evWeeklyStatus", "ทุกคนปกติ ไม่ต้องบันทึก", true); return; }
     const j = await api({ action: "eval_note", admin_pin: adminPin, branch_id: branchId, entries });
     if (!j || !j.ok){ setMsg("evWeeklyStatus", errText(j), false); return; }
     setMsg("evWeeklyStatus", "บันทึกแล้ว " + j.saved + " รายการ", true);
-    renderEvWeekly(); loadEvNotes(); loadEvalMonth();
-  }
-
-  // สรุปรอบ
-  async function loadEvalMonth(){
-    const box = $("evMonth"); box.innerHTML = "";
-    const j = await api({ action: "eval_month", admin_pin: adminPin, branch_id: branchId, date: $("evDate").value });
-    if (!j || !j.ok){ box.appendChild(el("div", "status", errText(j))); return; }
-    evCfg = j.eval;
-    j.people.forEach(p => box.appendChild(evPersonCard(p)));
-  }
-
-  function setMsg2(e, text, ok){ e.textContent = text; e.style.color = ok ? "#047857" : (ok === false ? "#dc2626" : "#374151"); }
-
-  function evPersonCard(p){
-    const saved = p.saved;
-    const card = el("div", "staffCard");
-    card.appendChild(el("b", "", p.label + " · " + fmtD(p.period.start) + " – " + fmtD(p.period.end) + (p.locked ? " 🔒" : "") + (saved ? " · ✅ บันทึกแล้ว" : "")));
-    const scores = {};
-    const totalBox = el("div", "evTotal");
-    const bonusOn = el("input"); bonusOn.type = "checkbox"; bonusOn.checked = saved ? saved.bonus_on : true; bonusOn.disabled = p.locked;
-    const bonusMax = el("input", "field sm"); bonusMax.type = "number"; bonusMax.min = "0"; bonusMax.value = saved ? saved.bonus_max : evCfg.bonus_max; bonusMax.disabled = p.locked;
-    const amtMode = evCfg.bonus_mode === "amount";
-    // ยอดโบนัสที่แอดมินใส่เอง (ว่าง = ใช้ยอดที่ระบบคิด)
-    const own = el("input", "field sm"); own.type = "number"; own.min = "0"; own.placeholder = "ตามระบบ"; own.disabled = p.locked;
-    let autoBonus = 0;
-    const show = el("input"); show.type = "checkbox"; show.checked = saved ? saved.show : evCfg.show_on_bill; show.disabled = p.locked;
-    const recalc = () => {
-      const on = evOnCrits();
-      const total = on.reduce((m, c) => m + (scores[c.id] || 0), 0);
-      const max = on.length * 3 || 12;
-      const scaled = Math.round(total * 12 / max);
-      let lv = evCfg.level_min.findIndex(m => scaled >= m); if (lv < 0) lv = 3;
-      if (evCfg.cap_if_one && on.some(c => scores[c.id] === 1) && lv < 2) lv = 2;
-      const pct = evCfg.level_pct[lv];
-      autoBonus = amtMode ? (evCfg.level_amount || [0, 0, 0, 0])[lv] : Math.round(Number(bonusMax.value || 0) * pct / 100);
-      const manual = own.value !== "";
-      const bonus = !bonusOn.checked ? 0 : manual ? Math.round(Number(own.value)) : autoBonus;
-      const how = manual ? "ใส่เอง" : amtMode ? "ตามระดับ" : pct + "%";
-      totalBox.textContent = total + "/" + max + " · " + evLevelsTh[lv] + " · โบนัส (" + how + ") = " + bonus.toLocaleString("th-TH") + " บาท" + (lv === 3 ? " · 💬 นัดคุยตัวต่อตัว" : "");
-    };
-    evOnCrits().forEach(c => {
-      const sg = p.suggest[c.id] || { score: 3, down: 0, up: 0 };
-      scores[c.id] = saved && saved.scores && saved.scores[c.id] ? saved.scores[c.id] : sg.score;
-      const row = el("div", "evRow");
-      const nm = el("div", "nm", c.th);
-      const info = c.id === "punctual"
-        ? "สายเกิน " + evCfg.late_grace_min + " นาที " + (sg.late || 0) + " ครั้ง · ขาด " + (sg.absent || 0) + (sg.down || sg.up ? " · 👎" + sg.down + " 👍" + sg.up : "")
-        : "👎 " + sg.down + " · 👍 " + sg.up;
-      nm.appendChild(el("div", "sub", info + " → แนะนำ " + sg.score));
-      row.appendChild(nm);
-      [1, 2, 3].forEach(v => {
-        const b = el("button", "sbtn" + (scores[c.id] === v ? " on" : "") + (sg.score === v ? " sug" : ""), String(v));
-        b.disabled = p.locked;
-        b.onclick = () => { scores[c.id] = v; row.querySelectorAll(".sbtn").forEach(x => x.classList.toggle("on", x.textContent === String(v))); recalc(); };
-        row.appendChild(b);
-      });
-      card.appendChild(row);
-    });
-    // เหตุผลในบิล
-    const picked = new Set(((saved && saved.reasons) || []).map(r => r.id));
-    const withText = p.notes.filter(n => n.note);
-    if (withText.length){
-      card.appendChild(el("div", "hint", "ติ๊กเหตุผลที่จะใส่ในบิล (สูงสุด 5 · เรื่องดีขึ้นก่อน):"));
-      withText.sort((a, b) => b.sign - a.sign).forEach(n => {
-        const lab = el("label", "check"); const cb = el("input");
-        cb.type = "checkbox"; cb.value = n.id; cb.checked = picked.has(n.id); cb.disabled = p.locked; cb.className = "evReason";
-        lab.append(cb, document.createTextNode(" " + (n.sign > 0 ? "👍 " : "👎 ") + critName(n.crit) + " · " + n.note + " · " + fmtD(n.date)));
-        card.appendChild(lab);
-      });
-    }
-    card.appendChild(totalBox);
-    const opts = el("div", "row");
-    const l1 = el("label", "check"); l1.append(bonusOn, document.createTextNode(" ให้โบนัส"));
-    const l2 = el("label", "check"); l2.append(show, document.createTextNode(" แสดงผลประเมินในบิล"));
-    opts.append(l1);
-    if (!amtMode) opts.append(el("span", "hint", "โบนัสเต็ม"), bonusMax);
-    opts.append(el("span", "hint", "ยอดเอง"), own, l2);
-    card.appendChild(opts);
-    bonusOn.onchange = recalc; bonusMax.oninput = recalc; own.oninput = recalc;
-    // บันทึกไว้แล้วด้วยยอดที่ไม่ตรงกับที่ระบบคิด = เคยใส่เอง
-    if (saved && saved.bonus_on){ setTimeout(() => { if (Number(saved.bonus) !== autoBonus){ own.value = saved.bonus; recalc(); } }, 0); }
-    const act = el("div", "row"); const st = el("div", "status");
-    if (!p.locked){
-      const save = el("button", "btn green", saved ? "บันทึกใหม่" : "บันทึกผลประเมิน");
-      save.onclick = async () => {
-        save.disabled = true; setMsg2(st, "กำลังบันทึก (แปลเหตุผลเป็นภาษาอื่นด้วย)…");
-        const reasons = [...card.querySelectorAll(".evReason")].filter(x => x.checked).map(x => Number(x.value)).slice(0, 5);
-        const j = await api({ action: "eval_save", admin_pin: adminPin, staff_id: p.staff_id, date: p.period.start, scores, bonus_on: bonusOn.checked, bonus_max: Number(bonusMax.value || 0), bonus_amount: own.value === "" ? null : Number(own.value), show: show.checked, reasons });
-        save.disabled = false;
-        if (!j || !j.ok){ setMsg2(st, errText(j), false); return; }
-        setMsg2(st, "บันทึกแล้ว · โบนัส " + Number(j.result.bonus).toLocaleString("th-TH") + " บาท เข้ายอดเงินแล้ว (ดูในแท็บเงิน / บิล)", true);
-      };
-      act.appendChild(save);
-      if (saved){
-        const del = el("button", "btn", "ลบผลประเมิน");
-        del.onclick = async () => {
-          if (!confirm("ลบผลประเมินของ " + p.label + "? โบนัสจะหายจากยอดเงิน")) return;
-          await api({ action: "eval_save", admin_pin: adminPin, staff_id: p.staff_id, date: p.period.start, delete: true });
-          loadEvalMonth();
-        };
-        act.appendChild(del);
-      }
-    } else act.appendChild(el("span", "hint", "รอบนี้ปิดแล้ว แก้ไม่ได้"));
-    card.append(act, st);
-    recalc();
-    return card;
+    renderEvWeekly(); loadEvalMonth();
   }
 
   // ตั้งค่า
@@ -1054,14 +1085,14 @@
     const lv = $("evLevels"); lv.innerHTML = "";
     evLevelsTh.forEach((name, i) => {
       const r = el("div", "row");
-      const lab = el("span", "hint", name + ": ตั้งแต่"); lab.style.cssText = "margin:0; min-width:120px;";
+      const lab = el("span", "hint", name); lab.style.cssText = "margin:0; min-width:90px; font-weight:900;";
       const mn = el("input", "field sm"); mn.type = "number"; mn.min = "0"; mn.max = "12"; mn.value = c.level_min[i]; mn.id = "evLvMin" + i;
       if (i === 3){ mn.disabled = true; mn.value = 0; }
       const pc = el("input", "field sm"); pc.type = "number"; pc.min = "0"; pc.max = "100"; pc.value = c.level_pct[i]; pc.id = "evLvPct" + i;
       const am = el("input", "field sm"); am.type = "number"; am.min = "0"; am.value = (c.level_amount || [1000, 700, 400, 0])[i]; am.id = "evLvAmt" + i;
       const pcWrap = el("span", "evPct"); pcWrap.append(pc, el("span", "hint", "%"));
       const amWrap = el("span", "evAmt"); amWrap.append(am, el("span", "hint", "บาท"));
-      r.append(lab, mn, el("span", "hint", "คะแนน · โบนัส"), pcWrap, amWrap);
+      r.append(lab, el("span", "hint", "ตั้งแต่"), mn, el("span", "hint", "คะแนน →"), pcWrap, amWrap);
       lv.appendChild(r);
     });
     evModeChange();
@@ -1078,8 +1109,7 @@
       const r = el("div", "row");
       const on = el("input"); on.type = "checkbox"; on.checked = c.on; on.onchange = () => { c.on = on.checked; };
       const nm = el("input", "field"); nm.value = c.th; nm.placeholder = "ชื่อเกณฑ์"; nm.oninput = () => { c.th = nm.value; };
-      const ds = el("input", "field"); ds.value = c.desc; ds.placeholder = "คำอธิบายสั้นๆ"; ds.oninput = () => { c.desc = ds.value; };
-      r.append(on, nm, ds);
+      r.append(on, nm);
       if (c.id === "punctual") r.appendChild(el("span", "hint", "⏱️ นับจากตอกบัตร"));
       else { const x = el("button", "btn", "ลบ"); x.onclick = () => { evCfg.criteria.splice(i, 1); renderCritEdit(); }; r.appendChild(x); }
       box.appendChild(r);
@@ -1096,14 +1126,15 @@
       enabled: $("evEnabled").checked, late_grace_min: n("evGrace"),
       late_cut: [n("evLate0"), n("evLate1")], note_cut: [n("evNote0"), n("evNote1")],
       level_min: [0, 1, 2, 3].map(i => i === 3 ? 0 : n("evLvMin" + i)), level_pct: [0, 1, 2, 3].map(i => n("evLvPct" + i)),
-      cap_if_one: $("evCap").checked, bonus_max: n("evBonus"), show_on_bill: $("evShow").checked,
       bonus_mode: $("evMode").value, level_amount: [0, 1, 2, 3].map(i => n("evLvAmt" + i)),
+      cap_if_one: $("evCap").checked, bonus_max: n("evBonus"), show_on_bill: $("evShow").checked,
       weekly: $("evWeeklyOn").checked, weekly_day: n("evWDay"), weekly_hour: n("evWHour"), kudos: $("evKudosOn").checked,
       criteria: evCfg.criteria.filter(x => (x.th || "").trim()),
     });
     const j = await api({ action: "save_eval_settings", admin_pin: adminPin, branch_id: branchId, eval: cfg });
     if (!j || !j.ok){ setMsg("evSetStatus", j && j.error === "need_migration_0011" ? "ต้องรันไฟล์ 0011_eval.sql ใน Supabase ก่อน" : errText(j), false); return; }
     setMsg("evSetStatus", "บันทึกแล้ว", true);
+    if (cfg.enabled) $("evSetBox").open = false; // ตั้งเสร็จแล้วพับเก็บ
     await loadEval();
   }
 
