@@ -193,6 +193,7 @@
       <input id="loginPin" data-tp="loginPinPh" placeholder="PIN" type="password" inputmode="numeric" maxlength="6" autocomplete="off" style="width:100%; padding:10px; border-radius:10px; border:2px solid #c7d2fe; font-size:15px; box-sizing:border-box; margin-top:8px;">
       <button onclick="staffLogin()" data-t="loginBtn" style="margin-top:8px; width:100%; border:none; border-radius:10px; padding:11px; font-weight:900; background:#0f172a; color:#fff; font-size:14px;">เข้าสู่ระบบ</button>
       <div class="cardHint" id="loginStatus" style="margin-top:6px; color:#b91c1c;"></div>
+      <div class="cardHint" id="loginQrHint" style="display:none; margin-top:8px; font-weight:800; color:#3730a3;"></div>
     </div>
 
     <div id="mainCards">
@@ -324,7 +325,7 @@
   }
 
   async function api(params){
-    params = { device: DEVICE, ...params };
+    params = { device: DEVICE, qr: scanCode(), ...params };
     try{
       const r = await fetch(API, {
         method: "POST",
@@ -378,6 +379,7 @@
       QR_REQUIRED = !!j.qr_required;
       applyBoot(j);
       if (scanCode() && !j.qr_ok){ ssSet("clock_scan", ""); showBanner(t("qrOld")); } // QR เก่า (แอดมินเปลี่ยนแล้ว)
+      else if (scanCode() && j.qr_required && !j.qr_here){ ssSet("clock_scan", ""); showBanner(t("ipNotAllowed")); } // สแกนแต่ไม่ได้ต่อ WiFi ร้าน
       updateQrGate();
       if (KEY) lsSet(cacheKey, JSON.stringify({ branches: j.branches, dict: j.dict, has_admin: j.has_admin, tz: j.tz }));
     } else if (!cached){
@@ -410,6 +412,9 @@
     if (!j) return;
     showBanner("");
     document.getElementById("branchName").textContent = j.branch_name || "";
+    const qh = document.getElementById("loginQrHint");
+    qh.style.display = j.need_login && j.qr_required ? "" : "none";
+    qh.textContent = t("loginQrHint");
     if (!j.device) return;
     const blocked = j.device === "blocked";
     document.getElementById("deviceTitle").textContent = blocked ? t("deviceBlockedTitle") : t("devicePendingTitle");
@@ -427,7 +432,12 @@
     if (!j || !j.ok){ st.textContent = errorText(j); return; }
     document.getElementById("loginPin").value = "";
     await bootstrap();
-    loadToday();
+    await loadToday();
+    const mine = ((currentBranch() || {}).staff || []);
+    if (mine.length === 1){
+      openPunch(mine[0]);
+      document.getElementById("pinInput").value = pin;
+    }
   }
 
   async function staffLogout(){

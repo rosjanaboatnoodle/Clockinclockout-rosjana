@@ -213,12 +213,17 @@ async function viewerOf(b: KeyBranch, p: Record<string, unknown>, touch = false)
   if (b.require_device && !kiosk && row?.status !== "approved") return "device_pending";
   if (!b.staff_login || kiosk) return { kiosk, staffId: null };
 
+  // Just scanned the wall QR in the shop (and on the shop's internet when that lock is on):
+  // the person is at the shop, so the page works like the shop tablet — pick your name, PIN, done.
+  const atShop = qrOk(b, p) && (!b.require_ip || ipAllowed(b, p));
+  const full: Viewer = { kiosk: false, staffId: null };
+
   // personal phone: must be signed in as someone who still works here
-  if (!row?.staff_id) return "need_login";
+  if (!row?.staff_id) return atShop ? full : "need_login";
   const { data: s } = await supabase.from("staff").select("id, branch_id, active, pin_hash").eq("id", row.staff_id).maybeSingle();
   if (!s || !s.active || !s.pin_hash || s.branch_id !== b.id) {
     await supabase.from("devices").update({ staff_id: null }).eq("id", row.id);
-    return "need_login";
+    return atShop ? full : "need_login";
   }
   return { kiosk: false, staffId: s.id };
 }
@@ -253,6 +258,11 @@ function ipTag(raw: string): string {
   const t = tail ? tail.split(":") : [];
   const groups = ip.includes("::") ? [...h, ...Array(Math.max(0, 8 - h.length - t.length)).fill("0"), ...t] : h;
   return groups.slice(0, 4).map((g) => g.replace(/^0+(?=.)/, "")).join(":") + "::/64";
+}
+
+function ipAllowed(b: KeyBranch, p: Record<string, unknown>): boolean {
+  const tag = ipTag(String(p._ip ?? ""));
+  return !!tag && (b.allowed_ips ?? []).includes(tag);
 }
 
 async function ipError(b: KeyBranch, p: Record<string, unknown>, staffName: string): Promise<string | null> {
@@ -526,7 +536,7 @@ async function handleBootstrap(p: Record<string, unknown>) {
   let admin = false;
   let me: number | null = null;  // signed-in person on a personal phone
   let kiosk = false;
-  let qrRequired = false, qrScanned = false;
+  let qrRequired = false, qrScanned = false, qrHere = false; // qrHere = right code and on the shop's internet
   if (p.admin_pin) {
     const g = await adminGate(p);
     if (g) return g;
@@ -543,12 +553,12 @@ async function handleBootstrap(p: Record<string, unknown>) {
       return json({
         ok: true, lang, tz: shopTz(), has_admin: true, branches: [], dict, branch_name: b.name ?? "",
         ...(v === "need_login"
-          ? { need_login: true }
+          ? { need_login: true, qr_required: !!b.qr_required }
           : { device: v === "device_blocked" ? "blocked" : "pending", device_code: deviceCode(cleanDevice(p.device)) }),
       });
     }
     if (v && typeof v !== "string") { me = v.staffId; kiosk = v.kiosk; }
-    if (b) { qrRequired = !!b.qr_required && !kiosk; qrScanned = qrOk(b, p); }
+    if (b) { qrRequired = !!b.qr_required && !kiosk; qrScanned = qrOk(b, p); qrHere = qrScanned && (!b.require_ip || ipAllowed(b, p)); }
   }
   const cols = "id, name, sort, lat, lng, radius_m, require_gps, require_photo" + (admin ? ", access_key, photo_keep_days" : "");
   let bq = supabase.from("branches").select(cols);
@@ -573,7 +583,7 @@ async function handleBootstrap(p: Record<string, unknown>) {
     tz: shopTz(),
     has_admin: await hasAdmin(),
     bad_link: !admin && !!p.key && !only,
-    me, kiosk, qr_required: qrRequired, qr_ok: qrScanned,
+    me, kiosk, qr_required: qrRequired, qr_ok: qrScanned, qr_here: qrHere,
     branches: (branches ?? []).map((b: Record<string, unknown>) => ({
       ...b,
       ...(admin ? {} : { access_key: undefined, photo_keep_days: undefined }), // keys only go to the admin
