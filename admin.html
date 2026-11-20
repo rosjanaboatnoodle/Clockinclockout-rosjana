@@ -671,7 +671,7 @@
 
 <div class="viewer" id="viewer" onclick="this.classList.remove('show')"><img id="viewerImg" alt=""></div>
 
-<script src="ui-text.js?v=20261121-5"></script><!-- แก้ ui-text.js แล้วเปลี่ยนเลข v ด้วย เครื่องเด็กจะได้โหลดไฟล์ใหม่ -->
+<script src="ui-text.js?v=20261121-6"></script><!-- แก้ ui-text.js แล้วเปลี่ยนเลข v ด้วย เครื่องเด็กจะได้โหลดไฟล์ใหม่ -->
 <script>
   // ใส่ค่าเดียวกับใน index.html
   const PROJECT_REF = "omsnqbuzyxyrsihybwmk";
@@ -1959,7 +1959,10 @@
     { k: "late_deduct", label: "หักเงินมาสาย", type: "bool", show: e => e.work_mode === "shift" },
     { k: "late_after_min", label: "สายเกินกี่นาทีถึงหัก", show: e => e.work_mode === "shift" && isTrue(e.late_deduct) },
     { k: "late_mode", label: "หักแบบ", type: "select", options: [["per_minute", "ตามนาทีที่สาย (คิดจากค่าแรงต่อชม.)"], ["fixed", "บาทต่อครั้ง"]], show: e => e.work_mode === "shift" && isTrue(e.late_deduct) },
-    { k: "late_amount", label: "หักครั้งละ (บาท)", show: e => e.work_mode === "shift" && isTrue(e.late_deduct) && e.late_mode === "fixed" }
+    { k: "late_amount", label: "หักครั้งละ (บาท)", show: e => e.work_mode === "shift" && isTrue(e.late_deduct) && e.late_mode === "fixed" },
+    { group: "ลาได้เงิน (ไม่บังคับ)" },
+    { k: "paid_leave", label: "วันลาที่อนุมัติแล้ว", type: "select", options: [["none", "ไม่ได้ค่าแรง (ค่าเริ่มต้น)"], ["sick", "ได้ค่าแรงเฉพาะลาป่วย"], ["all", "ได้ค่าแรงทุกประเภทลา"]] },
+    { k: "paid_leave_days", label: "ได้ค่าแรงปีละไม่เกินกี่วัน (0 = ไม่จำกัด)", show: e => e.paid_leave && e.paid_leave !== "none" }
   ];
   const WD_SHORT = ["อา.", "จ.", "อ.", "พ.", "พฤ.", "ศ.", "ส."];
   function isTrue(v){ return v === true || v === "true"; }
@@ -2463,6 +2466,7 @@
     const ev = b.eval;
     const pctBonus = ev && ev.bonus_max && Number(ev.bonus) === Math.round(ev.bonus_max * ev.pct / 100);
     if (t.bonus) line(T("billBonus"), pctBonus ? T("billBonusInfo", { p: ev.pct, max: money(ev.bonus_max) }) : "", "+" + money(t.bonus));
+    if (t.leave_pay) line(T("billLeavePay"), T("billLeavePayInfo", { n: num(t.paid_leave_days), r: money(t.leave_day_rate) }), "+" + money(t.leave_pay));
     line(T("billGross"), "", money(t.gross), "sum");
     bill.appendChild(tbl);
 
@@ -2510,6 +2514,8 @@
     [[T("billDaysWorked"), num(t.days_worked) + " " + T("billDays")], [T("billDaysOff"), num(t.days_off) + " " + T("billDays")],
      [T("billHours"), num(t.worked_hours) + " " + T("billHrs")], [T("billOt"), num(t.ot_hours) + " " + T("billHrs")]]
       .concat(t.break_hours ? [[T("billBreak"), num(t.break_hours) + " " + T("billHrs")]] : [])
+      .concat(t.leave_days ? [[T("billLeave"), num(t.leave_days) + " " + T("billDays")]] : [])
+      .concat(t.absent_days ? [[T("billAbsent"), num(t.absent_days) + " " + T("billDays")]] : [])
       .forEach(([k, v]) => stats.appendChild(el("span", "", k + " " + v)));
     bill.appendChild(stats);
 
@@ -2651,7 +2657,7 @@
         ["ชม.พัก", String(t.break_hours || 0)], ["กลับก่อน", (t.early_min || 0) + " น."],
         ["เบิก", (t.advances ? "−" : "") + baht(t.advances)], ["รออนุมัติ", baht(t.pending)],
         ["ขาดไม่แจ้ง", String(t.absent_days || 0)], ["ลา", String(t.leave_days || 0)]
-      ].concat(t.bonus ? [["โบนัสประเมิน", "+" + baht(t.bonus)]] : []));
+      ].concat(t.bonus ? [["โบนัสประเมิน", "+" + baht(t.bonus)]] : []).concat(t.leave_pay ? [["ลาได้เงิน", t.paid_leave_days + " วัน +" + baht(t.leave_pay)]] : []));
       const acts = el("div", "row"); acts.style.margin = "8px 0 0";
       const bb = el("button", "btn", "📄 บิล"); bb.onclick = () => openBill(p.staff_id, p.period.start);
       acts.appendChild(bb);

@@ -65,6 +65,7 @@
   .dot.working{ background:#10b981; }
   .dot.done{ background:#64748b; }
   .dot.onBreak{ background:#f59e0b; }
+  .dot.onLeaveToday{ background:#a78bfa; }
   .btnRow.breakRow .btn{ background:#fef3c7; color:#92400e; font-size:15px; padding:11px 10px; }
 
   .history{ display:flex; flex-direction:column; gap:6px; }
@@ -304,7 +305,7 @@
   </div>
 </div>
 
-<script src="ui-text.js?v=20261121-5"></script><!-- แก้ ui-text.js แล้วเปลี่ยนเลข v ด้วย เครื่องเด็กจะได้โหลดไฟล์ใหม่ -->
+<script src="ui-text.js?v=20261121-6"></script><!-- แก้ ui-text.js แล้วเปลี่ยนเลข v ด้วย เครื่องเด็กจะได้โหลดไฟล์ใหม่ -->
 <script>
   // ข้อมูลอยู่ใน Supabase (Edge Function "clock") ดูวิธีตั้งค่าใน README.md
   // ใส่ค่าจาก Supabase Dashboard -> Project Settings -> API:
@@ -566,6 +567,7 @@
       punches = j.punches || [];
       messages = j.messages || [];
       week = j.week === undefined ? null : j.week;
+      leaveToday = j.leave_today || [];
       renderAll();
     } else if (j && (j.error === "device_pending" || j.error === "device_blocked" || j.error === "need_login")){
       bootstrap(); // แอดมินเพิ่งเปิดล็อกเครื่อง หรือบล็อกเครื่องนี้
@@ -602,12 +604,14 @@
   }
 
   function openPunchOf(staffId){ return punches.find(p => p.staff_id === staffId && !p.check_out && !p.forgot_out) || null; }
+  let leaveToday = []; // staff ids ที่ลาวันนี้
   function stateOf(staffId){
     const mine = punches.filter(p => p.staff_id === staffId);
     const open = openPunchOf(staffId);
     if (open && open.on_break) return "onBreak";
     if (open) return "working";
     if (mine.some(p => p.check_out)) return "done";
+    if (leaveToday.includes(staffId)) return "onLeaveToday";
     return "notYet";
   }
 

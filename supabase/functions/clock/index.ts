@@ -844,7 +844,10 @@ async function handleToday(p: Record<string, unknown>) {
     calendarMessages(branchId, localDate(new Date()), lang),
     calendarWeek(branchId, lang),
   ]);
-  return json({ ok: true, date: localDate(new Date()), punches: await publicPunches(branchId, punches), messages, week });
+  // people on leave today (waiting or approved) — shown on the names list
+  const { data: lv, error: lvErr } = await supabase.from("leaves").select("staff_id, status").eq("branch_id", branchId).eq("date", localDate(new Date()));
+  const leaveToday = lvErr ? [] : (lv ?? []).filter((l) => l.status !== "rejected").map((l) => l.staff_id).filter((id) => !me || id === me);
+  return json({ ok: true, date: localDate(new Date()), punches: await publicPunches(branchId, punches), messages, week, leave_today: leaveToday });
 }
 
 function publicPunch(r: Punch) {
@@ -1296,6 +1299,7 @@ type Pay = {
   break_mode: "auto" | "punch" | "paid"; break_min: number; break_after_hours: number;
   break_min_deduct: number; break_flag_min: number; break_fallback_auto: boolean;
   late_deduct: boolean; late_after_min: number; late_mode: "per_minute" | "fixed"; late_amount: number;
+  paid_leave: "none" | "sick" | "all"; paid_leave_days: number;
 };
 
 const PAY_DEFAULTS: Pay = {
@@ -1307,6 +1311,7 @@ const PAY_DEFAULTS: Pay = {
   work_mode: "none", default_shift_id: null, weekday_shifts: {}, auto_shift: true, count_early: false,
   break_mode: "paid", break_min: 60, break_after_hours: 6, break_min_deduct: 0, break_flag_min: 90, break_fallback_auto: true,
   late_deduct: false, late_after_min: 15, late_mode: "per_minute", late_amount: 0,
+  paid_leave: "none", paid_leave_days: 30, // optional: approved leave paid as a normal day, up to N days a year (0 = no limit)
 };
 
 type FieldRule = { kind: "num" | "enum" | "time" | "bool" | "id" | "weekdays"; min?: number; max?: number; values?: string[] };
@@ -1340,6 +1345,8 @@ const PAY_FIELDS: Record<string, FieldRule> = {
   late_after_min: { kind: "num", min: 0, max: 600 },
   late_mode: { kind: "enum", values: ["per_minute", "fixed"] },
   late_amount: { kind: "num", min: 0, max: 100000 },
+  paid_leave: { kind: "enum", values: ["none", "sick", "all"] },
+  paid_leave_days: { kind: "num", min: 0, max: 366 },
 };
 
 function cleanTime(v: unknown): string | null {
@@ -1692,6 +1699,25 @@ async function computeSummary(b: BranchFull, s: StaffFull, per: { start: string;
   const leaveDates = [...sc.leaves].filter((k) => k.startsWith(`${s.id}|`)).map((k) => k.split("|")[1]).sort();
   const ev = await loadEvaluation(s.id, per.start);
   const bonus = ev ? Number(ev.bonus) || 0 : 0;
+  // paid leave (optional): approved leave of the paid kind, up to the yearly limit, on days not worked
+  const paidLeaveDates: string[] = [];
+  if (rules.paid_leave !== "none") {
+    const yearStart = per.start.slice(0, 4) + "-01-01";
+    const { data: lv, error: lvErr } = await supabase.from("leaves").select("date, kind, status")
+      .eq("staff_id", s.id).eq("status", "approved").gte("date", yearStart).lte("date", per.end).order("date");
+    if (!lvErr) {
+      let used = 0;
+      for (const l of (lv ?? []) as Array<{ date: string; kind: string }>) {
+        if (rules.paid_leave === "sick" && l.kind !== "sick") continue;
+        if (byDate.has(l.date)) continue; // came to work anyway
+        if (rules.paid_leave_days > 0 && used >= rules.paid_leave_days) break;
+        used++;
+        if (l.date >= per.start) paidLeaveDates.push(l.date);
+      }
+    }
+  }
+  const leaveDayRate = rules.pay_type === "hourly" ? rules.hourly_rate * rules.std_hours : rules.daily_rate;
+  const leavePay = round2(paidLeaveDates.length * leaveDayRate);
   return {
     staff_id: s.id, name: s.name, label: s.label || s.name, pay_type: rules.pay_type,
     rates: { daily_rate: rules.daily_rate, hourly_rate: rules.hourly_rate, ot_rate: days.find((x) => x.ot_rate)?.ot_rate ?? null },
@@ -1708,8 +1734,9 @@ async function computeSummary(b: BranchFull, s: StaffFull, per: { start: string;
       early_min: days.reduce((m, x) => m + x.early_min, 0),
       late_deduct: lateDeduct,
       absent_days: absentDates.length, leave_days: leaveDates.length,
-      base, ot_pay: otPay, bonus, gross: round2(base + otPay + bonus - lateDeduct),
-      advances: advTotal, pending: sum(pending, "amount"), net: round2(base + otPay + bonus - lateDeduct - advTotal),
+      paid_leave_days: paidLeaveDates.length, leave_pay: leavePay, leave_day_rate: leaveDayRate,
+      base, ot_pay: otPay, bonus, gross: round2(base + otPay + bonus + leavePay - lateDeduct),
+      advances: advTotal, pending: sum(pending, "amount"), net: round2(base + otPay + bonus + leavePay - lateDeduct - advTotal),
     },
     days,
     absent_dates: absentDates, leave_dates: leaveDates,
