@@ -750,24 +750,29 @@
     if (!win){ setMsg("qrStatus", "เบราว์เซอร์บล็อกหน้าต่างใหม่ ให้อนุญาตป๊อปอัปแล้วลองใหม่", false); return; }
     const w = { ssid: $("wifiSsid").value.trim(), pass: $("wifiPass").value, type: $("wifiType").value, hidden: $("wifiHidden").checked };
     const wifi = wifiText(w);
-    const box = (svg, n, th, en, sub) => '<div class="box"><div class="n">' + n + '</div>' + svg +
-      '<div class="th">' + th + '</div><div class="en">' + en + '</div>' + (sub ? '<div class="sub">' + sub + '</div>' : "") + '</div>';
+    // ไทย / พม่า / อังกฤษ (พนักงานส่วนใหญ่อ่านพม่า)
+    const box = (svg, n, th, my, en, sub) => '<div class="box"><div class="n">' + n + '</div>' + svg +
+      '<div class="th">' + th + '</div><div class="my" lang="my">' + my + '</div><div class="en">' + en + '</div>' +
+      (sub ? '<div class="sub">' + sub + '</div>' : "") + '</div>';
     const html = '<!doctype html><html lang="th"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">' +
-      '<title>QR ตอกบัตร - ' + escHtml(qrData.name) + '</title><style>' +
-      '@page{ size:A4; margin:12mm; } body{ font-family:system-ui,-apple-system,"Noto Sans Thai",sans-serif; margin:0; color:#0f172a; background:#fff; text-align:center; }' +
+      '<title>QR ตอกบัตร - ' + escHtml(qrData.name) + '</title>' +
+      '<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>' +
+      '<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+Myanmar:wght@400;700&family=Noto+Sans+Thai:wght@400;700;900&display=swap" rel="stylesheet"><style>' +
+      '@page{ size:A4; margin:12mm; } body{ font-family:"Noto Sans Thai","Noto Sans Myanmar",system-ui,-apple-system,"Myanmar Text","Myanmar Sangam MN",sans-serif; margin:0; color:#0f172a; background:#fff; text-align:center; }' +
       'h1{ font-size:26px; margin:6px 0 2px; } .shop{ font-size:16px; color:#475569; margin-bottom:14px; }' +
       '.wrap{ display:flex; gap:18px; justify-content:center; flex-wrap:wrap; }' +
       '.box{ border:3px solid #0f172a; border-radius:18px; padding:14px 14px 16px; width:82mm; position:relative; }' +
       '.box svg{ width:70mm; height:70mm; display:block; margin:6px auto; }' +
       '.n{ position:absolute; top:-16px; left:-16px; width:38px; height:38px; border-radius:50%; background:#0f172a; color:#fff; font-size:22px; font-weight:900; line-height:38px; }' +
-      '.th{ font-size:22px; font-weight:900; } .en{ font-size:15px; color:#475569; font-weight:700; } .sub{ font-size:13px; color:#64748b; margin-top:6px; word-break:break-all; }' +
+      '.th{ font-size:22px; font-weight:900; } .my{ font-family:"Noto Sans Myanmar","Myanmar Text","Myanmar Sangam MN",sans-serif; font-size:17px; font-weight:700; line-height:1.9; margin:2px 0; } .en{ font-size:15px; color:#475569; font-weight:700; } .sub{ font-size:13px; color:#64748b; margin-top:6px; word-break:break-all; }' +
       '.note{ font-size:13px; color:#64748b; margin-top:16px; } .btn{ margin:14px; padding:10px 18px; font-size:16px; font-weight:900; border-radius:10px; border:none; background:#0f172a; color:#fff; }' +
       '@media print{ .btn{ display:none; } }</style></head><body>' +
       '<button class="btn" onclick="print()">🖨️ ปริ้น / บันทึกเป็น PDF</button>' +
-      '<h1>⏱️ ตอกบัตรเข้า-ออกงาน</h1><div class="shop">' + escHtml(qrData.name) + '</div><div class="wrap">' +
-      (wifi ? box(qrSvg(wifi), "1", "📶 ต่อ WiFi ร้าน", "Connect to shop WiFi", "WiFi: " + escHtml(w.ssid)) : "") +
-      box(qrSvg(qrPunchUrl()), wifi ? "2" : "1", "📷 สแกนเพื่อตอกบัตร", "Scan to clock in / out", "ต้องสแกนใหม่ทุกครั้ง · Scan every time") +
-      '</div><div class="note">ต่อ WiFi ร้านก่อน แล้วสแกน QR ตอกบัตร · Connect to the WiFi first, then scan to clock in/out</div></body></html>';
+      '<h1>⏱️ ตอกบัตรเข้า-ออกงาน</h1><div class="my" lang="my" style="font-size:19px;">အလုပ်ဝင်ချိန် / ထွက်ချိန် မှတ်တမ်းတင်ရန်</div><div class="shop">' + escHtml(qrData.name) + '</div><div class="wrap">' +
+      (wifi ? box(qrSvg(wifi), "1", "📶 ต่อ WiFi ร้าน", "ဆိုင် WiFi ချိတ်ရန်", "Connect to shop WiFi", "WiFi: " + escHtml(w.ssid)) : "") +
+      box(qrSvg(qrPunchUrl()), wifi ? "2" : "1", "📷 สแกนเพื่อตอกบัตร", "အလုပ်ဝင်/ထွက် မှတ်ရန် စကင်ဖတ်ပါ", "Scan to clock in / out",
+        "ต้องสแกนใหม่ทุกครั้ง · <span lang=\"my\" class=\"my\" style=\"font-size:13px;\">အကြိမ်တိုင်း အသစ်ပြန်စကင်ဖတ်ပါ</span> · Scan every time") +
+      '</div><div class="note">ต่อ WiFi ร้านก่อน แล้วสแกน QR ตอกบัตร<br><span class="my" lang="my" style="font-size:14px;">WiFi အရင်ချိတ်ပြီးမှ QR ကို စကင်ဖတ်ပါ</span><br>Connect to the WiFi first, then scan to clock in/out</div></body></html>';
     win.document.open(); win.document.write(html); win.document.close();
     setMsg("qrStatus", "เปิดหน้าปริ้นแล้ว (แท็บใหม่)", true);
   }
