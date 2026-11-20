@@ -2526,12 +2526,17 @@ async function handleCronTick(p: Record<string, unknown>) {
     // staff: calendar duty tomorrow, once, from the set hour
     if (cfg.duty && mine.length && hour >= cfg.duty_hour) {
       const byLang = new Map<string, Awaited<ReturnType<typeof calendarRange>>>();
+      const dayOf = async (lang: string) => {
+        if (!byLang.has(lang)) byLang.set(lang, await calendarRange(b.id, tomorrow, tomorrow, cleanLang(lang)));
+        return byLang.get(lang)?.[0]?.items ?? [];
+      };
       for (const s of mine) {
-        if (!(await onceKey(`duty:${s.id}:${tomorrow}`))) continue;
+        // mark as sent only when there is a duty, so one added later in the evening still goes out
+        const has = (await dayOf("th")).some((it) => it.kind === "person" && it.person === s.name);
+        if (!has || !(await onceKey(`duty:${s.id}:${tomorrow}`))) continue;
         sent += await pushStaff(s.id, async (lang) => {
-          if (!byLang.has(lang)) byLang.set(lang, await calendarRange(b.id, tomorrow, tomorrow, cleanLang(lang)));
-          const items = (byLang.get(lang)?.[0]?.items ?? []).filter((it) => it.kind === "person" && it.person === s.name);
-          return items.length ? { title: await ntText(lang, "ntDuty"), body: items.map((it) => it.name || it.message).join(" · "), tag: "duty" } : { title: "", body: "" };
+          const items = (await dayOf(lang)).filter((it) => it.kind === "person" && it.person === s.name);
+          return { title: await ntText(lang, "ntDuty"), body: items.map((it) => it.name || it.message).join(" · "), tag: "duty" };
         }, subs);
       }
     }
