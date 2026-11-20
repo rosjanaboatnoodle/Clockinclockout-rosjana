@@ -106,6 +106,11 @@
   .weekNone{ color:var(--muted); font-weight:800; font-size:13px; }
   .moreBtn{ display:block; width:100%; margin-top:6px; border:none; background:transparent; color:#4338ca; font-weight:900; font-size:13px; padding:6px; cursor:pointer; }
   .pushRow{ margin:10px 0 4px; }
+  .overlay.sheet{ z-index:120; }
+  #sheetBody .leaveBox{ border-top:none; margin-top:0; padding-top:0; }
+  .actRow{ display:flex; gap:8px; margin:12px 0 6px; }
+  .actBtn{ flex:1; border:none; border-radius:14px; padding:14px 6px; font-weight:900; font-size:14.5px; cursor:pointer; background:#eef2ff; color:#3730a3; }
+  .actBtn:nth-child(2){ background:#fef3c7; color:#92400e; } .actBtn:nth-child(3){ background:#fce7f3; color:#9d174d; }
   .qrNeed{ background:#eef2ff; color:#3730a3; border-radius:12px; padding:14px; font-weight:900; text-align:center; font-size:15px; margin:8px 0; line-height:1.5; }
   .pushRow .sendBtn{ width:100%; }
   .linkBtn{ border:none; background:#fff; color:#4338ca; font-weight:900; font-size:13px; border-radius:999px; padding:7px 12px; cursor:pointer; }
@@ -270,6 +275,14 @@
   </div>
 </div>
 
+<!-- ขอลา / ขอเบิก / ชมเพื่อน -->
+<div class="overlay sheet" id="sheetOverlay" onclick="if (event.target === this) closeSheet()">
+  <div class="modal">
+    <div id="sheetBody"></div>
+    <button class="btn btnClose" onclick="closeSheet()" data-t="close">ปิด</button>
+  </div>
+</div>
+
 <div class="overlay" id="monthOverlay">
   <div class="modal">
     <div class="modalTitle" data-t="monthTitle">📅 ตารางงานทั้งเดือน</div>
@@ -285,7 +298,7 @@
   </div>
 </div>
 
-<script src="ui-text.js?v=20261121-3"></script><!-- แก้ ui-text.js แล้วเปลี่ยนเลข v ด้วย เครื่องเด็กจะได้โหลดไฟล์ใหม่ -->
+<script src="ui-text.js?v=20261121-4"></script><!-- แก้ ui-text.js แล้วเปลี่ยนเลข v ด้วย เครื่องเด็กจะได้โหลดไฟล์ใหม่ -->
 <script>
   // ข้อมูลอยู่ใน Supabase (Edge Function "clock") ดูวิธีตั้งค่าใน README.md
   // ใส่ค่าจาก Supabase Dashboard -> Project Settings -> API:
@@ -1074,9 +1087,7 @@
       const r = await api({ action: "request_leave", key: KEY, staff_id: current.id, pin, from: from.value, to: to.value, kind, note: note.value.trim() });
       send.disabled = false;
       if (!r || !r.ok){ msg.textContent = r && r.error === "too_many_days" ? t("leaveTooLong") : r && (r.error === "bad_date") ? t("leaveBadDate") : errorText(r); msg.className = "result err"; return; }
-      await openMy(true);
-      const m2 = document.querySelector("#myBox .leaveBox .result");
-      if (m2){ m2.textContent = t("leaveSent"); m2.className = "result ok"; }
+      await refreshSheet(t("leaveSent"));
     };
     // วันลาของฉัน
     const list = (j.leaves || []);
@@ -1094,7 +1105,7 @@
           x.onclick = async () => {
             if (!confirm(t("leaveCancelAsk"))) return;
             const rr = await api({ action: "cancel_leave", key: KEY, staff_id: current.id, pin, id: l.id });
-            if (rr && rr.ok) openMy(true);
+            if (rr && rr.ok) refreshSheet("");
           };
           right.appendChild(x);
         }
@@ -1119,6 +1130,20 @@
     if (j.late_times) stat(String(j.late_times), t("lateTimes"));
     if (j.absent_days) stat(String(j.absent_days), t("absentDays"));
     box.appendChild(stats);
+    MY = { j, pin };
+    // ปุ่มเรียงกัน กดแล้วค่อยเปิดหน้าต่างของเรื่องนั้น
+    const acts = el("div", "actRow");
+    const act = (label, kind) => { const b = el("button", "actBtn", label); b.onclick = () => openSheet(kind); acts.appendChild(b); };
+    act(t("leaveTitle"), "leave");
+    if (j.staff_advance) act(t("advBtn"), "adv");
+    if (j.kudos_on) act(t("kudosTitle"), "kudos");
+    box.appendChild(acts);
+    // วันลาที่จะถึง (สั้นๆ)
+    const soon = (j.leaves || []).filter(l => l.date >= shopToday() && l.status !== "rejected");
+    if (soon.length){
+      const st = soon.some(l => l.status === "pending") ? t("statusPending") : t("statusApproved");
+      box.appendChild(el("div", "fine", t("onLeave") + ": " + soon.slice(0, 5).map(l => fmtDay(l.date)).join(", ") + (soon.length > 5 ? " …" : "") + " · " + st));
+    }
     if (!IS_KIOSK) box.appendChild(pushRow(pin));
     if (!j.advances.length) box.appendChild(el("div", "empty", t("noAdvances")));
     j.advances.slice().reverse().forEach(a => {
@@ -1131,11 +1156,11 @@
       row.appendChild(right);
       box.appendChild(row);
     });
-    renderLeave(box, j, pin);
-    if (j.kudos_on) renderKudos(box, pin);
-    if (!j.staff_advance){ box.appendChild(el("div", "fine", t("advanceOff"))); return; }
+  }
 
-    box.appendChild(el("div", "cardTitle", t("requestTitle"))).style.marginTop = "10px";
+  // ---------- ขอเบิก (หน้าต่างแยก) ----------
+  function renderAdvance(box, j, pin){
+    box.appendChild(el("div", "cardTitle", t("requestTitle")));
     const amount = el("input"); amount.type = "number"; amount.min = "1"; amount.inputMode = "decimal"; amount.placeholder = t("amountPh");
     const item = el("input"); item.placeholder = t("itemPh"); item.maxLength = 100;
     const r1 = el("div", "reqRow"); r1.appendChild(amount); box.appendChild(r1);
@@ -1156,11 +1181,28 @@
       const r = await api({ action: "request_advance", key: KEY, staff_id: current.id, pin, amount: n, item: item.value.trim() });
       send.disabled = false;
       if (!r || !r.ok){ msg.textContent = r && r.error === "bad_amount" ? t("badAmount") : (r && r.error === "advance_off" ? t("advanceOff") : (r && r.error === "locked" ? t("locked") : errorText(r))); msg.className = "result err"; return; }
-      const again = await api({ action: "my_summary", key: KEY, staff_id: current.id, pin, lang });
-      if (again && again.ok) renderMy(again, pin);
-      const m2 = document.querySelector("#myBox .result");
-      if (m2){ m2.textContent = r.status === "approved" ? t("reqApproved") : t("reqPending"); m2.className = "result ok"; }
+      await refreshSheet(r.status === "approved" ? t("reqApproved") : t("reqPending"));
     };
+  }
+
+  // ---------- หน้าต่างขอลา / ขอเบิก / ชมเพื่อน ----------
+  let MY = null, sheetKind = "";
+  function openSheet(kind){
+    if (!MY) return;
+    sheetKind = kind;
+    const body = document.getElementById("sheetBody"); body.innerHTML = "";
+    if (kind === "leave") renderLeave(body, MY.j, MY.pin);
+    else if (kind === "adv") renderAdvance(body, MY.j, MY.pin);
+    else if (kind === "kudos") renderKudos(body, MY.pin);
+    document.getElementById("sheetOverlay").classList.add("show");
+  }
+  function closeSheet(){ document.getElementById("sheetOverlay").classList.remove("show"); }
+  // ส่งแล้ว: โหลดยอดใหม่ เปิดหน้าต่างเดิมพร้อมข้อความว่าสำเร็จ
+  async function refreshSheet(okText){
+    await openMy(true);
+    openSheet(sheetKind);
+    const r = document.querySelector("#sheetBody .result");
+    if (r && okText){ r.textContent = okText; r.className = "result ok"; }
   }
 
 
