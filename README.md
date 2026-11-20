@@ -23,7 +23,7 @@
 
 1. Supabase → **SQL Editor** → วาง `supabase/migrations/0001_clock.sql` ทั้งไฟล์ → **Run**
    (ไม่กระทบข้อมูลปฏิทิน แค่เพิ่มช่อง PIN และตารางตอกบัตร)
-   แล้วทำแบบเดียวกันกับ `0002_gps_photo.sql` (GPS + ที่เก็บรูป), `0003_pay.sql` (ค่าแรง โอที รอบ เบิกเงิน) `0004_security.sql` (ล็อกรหัสผิด + ลิงก์ลับสาขา) `0005_shifts.sql` (กะ เวลาพัก มาสาย) `0006_access.sql` (ล็อกกับเครื่อง + ล็อกเน็ตร้าน) `0007_staff_login.sql` (เครื่องกลางร้าน + มือถือส่วนตัว) `0008_push.sql` (แจ้งเตือน) `0009_qr.sql` (QR ติดผนัง), `0010_leave.sql` (ขอลา + ขาดไม่แจ้ง) และ `0011_eval.sql` (ประเมินประจำเดือน) ตามลำดับ
+   แล้วทำแบบเดียวกันกับ `0002_gps_photo.sql` (GPS + ที่เก็บรูป), `0003_pay.sql` (ค่าแรง โอที รอบ เบิกเงิน) `0004_security.sql` (ล็อกรหัสผิด + ลิงก์ลับสาขา) `0005_shifts.sql` (กะ เวลาพัก มาสาย) `0006_access.sql` (ล็อกกับเครื่อง + ล็อกเน็ตร้าน) `0007_staff_login.sql` (เครื่องกลางร้าน + มือถือส่วนตัว) `0008_push.sql` (แจ้งเตือน) `0009_qr.sql` (QR ติดผนัง), `0010_leave.sql` (ขอลา + ขาดไม่แจ้ง), `0011_eval.sql` (ประเมินประจำเดือน) และ `0012_thai.sql` (แปลข้อความที่พนักงานพิมพ์เป็นไทยให้แอดมิน) ตามลำดับ
 2. **Edge Functions** → **Deploy a new function** (ผ่าน Editor) → ตั้งชื่อ **`clock`** → วาง `supabase/functions/clock/index.ts` ทั้งไฟล์ → **Deploy**
 3. ในหน้า function `clock` → แท็บ **Settings** → ปิด **Verify JWT with legacy secret** → Save
 4. Secrets: `GEMINI_API_KEY` มีแล้วจากปฏิทิน (ใช้ร่วมกันทั้ง project) ไม่ต้องเพิ่ม

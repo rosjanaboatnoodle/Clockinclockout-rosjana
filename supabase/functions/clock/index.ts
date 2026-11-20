@@ -1,6 +1,6 @@
 // Edge Function "clock" — ระบบตอกบัตร (ใช้ Supabase project เดียวกับปฏิทินได้ หรือใช้เดี่ยวๆ ก็ได้)
 //
-// Database: run supabase/migrations/0001_clock.sql … 0011_eval.sql in order.
+// Database: run supabase/migrations/0001_clock.sql … 0012_thai.sql in order.
 // Deploy: Supabase Dashboard -> Edge Functions -> create function named "clock" ->
 // paste this file's contents -> Deploy -> แท็บ Settings -> ปิด "Verify JWT with legacy secret"
 //
@@ -355,6 +355,34 @@ async function callGeminiJson(prompt: string): Promise<unknown> {
   const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
   if (!text) throw new Error("gemini_empty_response");
   return JSON.parse(text);
+}
+
+// Staff may write in their own language (kudos, leave reason, advance item). Admin pages show Thai;
+// the original is kept in *_orig so the person still sees what they wrote.
+async function toThai(text: string): Promise<{ th: string; orig: string }> {
+  const t = text.trim();
+  if (!t) return { th: "", orig: "" };
+  const letters = t.replace(/[\s\d\p{P}\p{S}]/gu, "");
+  const thai = (letters.match(/[\u0E00-\u0E7F]/g) ?? []).length;
+  if (!letters.length || thai / letters.length > 0.5) return { th: t, orig: "" }; // already Thai
+  try {
+    const r = await callGeminiJson(`Translate this short message written by a restaurant staff member into natural, short Thai for the Thai manager. Keep people's names as they are. Return ONLY JSON {"th":"..."}.
+
+${JSON.stringify(t)}`) as { th?: unknown };
+    const th = String(r?.th ?? "").trim();
+    return th ? { th: th.slice(0, 300), orig: t } : { th: t, orig: "" };
+  } catch (e) {
+    console.error("toThai failed", e);
+    return { th: t, orig: "" };
+  }
+}
+
+// Insert with the *_orig column; if 0012_thai.sql isn't run yet, insert without it.
+async function insertWithOrig(table: string, row: Record<string, unknown>, origKey: string) {
+  const first = await supabase.from(table).insert(row);
+  if (!first.error || !(origKey in row)) return first;
+  const rest = { ...row }; delete rest[origKey];
+  return await supabase.from(table).insert(rest);
 }
 
 // Thai texts -> { key: { en, my, lo, km, vi } }. One AI call per 40 texts.
@@ -2252,7 +2280,7 @@ async function handleMySummary(p: Record<string, unknown>) {
     absent_days: sum.totals.absent_days,
     leaves: await myLeaves(who.s.id, sum.period.start),
     kudos_on: !!(await branchEval(who.b.id).then((c) => c?.enabled && c.kudos)),
-    advances: sum.advances.map((a) => ({ id: a.id, date: a.date, amount: Number(a.amount), item: a.item, status: a.status })),
+    advances: sum.advances.map((a) => ({ id: a.id, date: a.date, amount: Number(a.amount), item: (a as Record<string, unknown>).item_orig || a.item, status: a.status })),
     advances_total: sum.totals.advances,
     pending_total: sum.totals.pending,
   });
@@ -2267,12 +2295,13 @@ async function handleRequestAdvance(p: Record<string, unknown>) {
   const date = localDate(new Date());
   if (await isLocked(who.s.id, date)) return json({ ok: false, error: "locked" });
   const auto = Number(who.b.advance_auto_max) > 0 && amount <= Number(who.b.advance_auto_max);
-  const { error } = await supabase.from("advances").insert({
-    branch_id: who.b.id, staff_id: who.s.id, date, amount, item: String(p.item ?? "").trim().slice(0, 100),
+  const tr = await toThai(String(p.item ?? "").slice(0, 100));
+  const { error } = await insertWithOrig("advances", {
+    branch_id: who.b.id, staff_id: who.s.id, date, amount, item: tr.th.slice(0, 100), item_orig: tr.orig,
     status: auto ? "approved" : "pending", created_by: "staff", decided_at: auto ? new Date().toISOString() : null,
-  });
+  }, "item_orig");
   if (error) return json({ ok: false, error: error.message });
-  if (!auto) await notifyAdvanceRequest(who.b.id, who.s.label || who.s.name, amount, String(p.item ?? "").trim().slice(0, 100));
+  if (!auto) await notifyAdvanceRequest(who.b.id, who.s.label || who.s.name, amount, tr.th.slice(0, 100));
   return json({ ok: true, status: auto ? "approved" : "pending" });
 }
 
@@ -3126,9 +3155,10 @@ async function handleKudos(p: Record<string, unknown>) {
   if (!note) return json({ ok: false, error: "kudos_empty" });
   const { data: target } = await supabase.from("staff").select("id, branch_id, active").eq("id", to).maybeSingle();
   if (!target || !target.active || target.branch_id !== who.b.id || target.id === who.s.id) return json({ ok: false, error: "unknown_staff" });
-  const { error } = await supabase.from("eval_notes").insert({
-    branch_id: who.b.id, staff_id: to, crit: null, sign: 1, note, date: localDate(new Date()), source: "kudos", from_staff_id: who.s.id, status: "new",
-  });
+  const tr = await toThai(note);
+  const { error } = await insertWithOrig("eval_notes", {
+    branch_id: who.b.id, staff_id: to, crit: null, sign: 1, note: tr.th, note_orig: tr.orig, date: localDate(new Date()), source: "kudos", from_staff_id: who.s.id, status: "new",
+  }, "note_orig");
   if (error) return json({ ok: false, error: "need_migration_0011" });
   return json({ ok: true });
 }
@@ -3155,14 +3185,14 @@ function dateRangeTh(dates: string[]): string {
   return dates.length > 1 ? `${f(dates[0])}–${f(dates[dates.length - 1])}` : f(dates[0]);
 }
 
-async function saveLeave(staffId: number, branchId: string, dates: string[], kind: string, note: string, status: string, by: string): Promise<string | null> {
+async function saveLeave(staffId: number, branchId: string, dates: string[], kind: string, note: string, status: string, by: string, noteOrig = ""): Promise<string | null> {
   for (const d of dates) if (await isLocked(staffId, d)) return "locked";
   for (const d of dates) {
     await supabase.from("leaves").delete().eq("staff_id", staffId).eq("date", d);
-    const { error } = await supabase.from("leaves").insert({
-      branch_id: branchId, staff_id: staffId, date: d, kind, note, status, created_by: by,
+    const { error } = await insertWithOrig("leaves", {
+      branch_id: branchId, staff_id: staffId, date: d, kind, note, note_orig: noteOrig, status, created_by: by,
       decided_at: status === "pending" ? null : new Date().toISOString(),
-    });
+    }, "note_orig");
     if (error) return "need_migration_0010";
   }
   return null;
@@ -3175,8 +3205,9 @@ async function handleRequestLeave(p: Record<string, unknown>) {
   const dates = leaveDates(p);
   if (typeof dates === "string") return json({ ok: false, error: dates });
   const kind = LEAVE_KINDS.includes(String(p.kind)) ? String(p.kind) : "other";
-  const note = String(p.note ?? "").trim().slice(0, 200);
-  const err = await saveLeave(who.s.id, who.b.id, dates, kind, note, "pending", "staff");
+  const tr = await toThai(String(p.note ?? "").slice(0, 200));
+  const note = tr.th;
+  const err = await saveLeave(who.s.id, who.b.id, dates, kind, note, "pending", "staff", tr.orig);
   if (err) return json({ ok: false, error: err });
   if ((await branchNotify(who.b.id)).admin_leave) {
     await pushAdmins(who.b.id, { title: "📝 มีคนขอลา", body: `${who.s.label || who.s.name} ขอลา ${dateRangeTh(dates)} (${LEAVE_TH[kind]})${note ? " · " + note : ""}`, tag: "leave" });
@@ -3196,9 +3227,12 @@ async function handleCancelLeave(p: Record<string, unknown>) {
 }
 
 async function myLeaves(staffId: number, from: string) {
-  const { data, error } = await supabase.from("leaves").select("id, date, kind, note, status")
+  const q = (cols: string) => supabase.from("leaves").select(cols)
     .eq("staff_id", staffId).gte("date", from).lte("date", addDays(localDate(new Date()), 60)).order("date");
-  return error ? [] : data ?? [];
+  let { data, error } = await q("id, date, kind, note, note_orig, status");
+  if (error) ({ data, error } = await q("id, date, kind, note, status"));
+  // the person sees what they wrote, not the Thai translation
+  return error ? [] : ((data ?? []) as Array<Record<string, unknown>>).map((l) => ({ ...l, note: l.note_orig || l.note, note_orig: undefined }));
 }
 
 // Admin: leave in a date range (all statuses), waiting ones first.

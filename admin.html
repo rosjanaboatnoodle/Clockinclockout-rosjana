@@ -859,6 +859,7 @@
     kud.forEach(n => {
       const bar = el("div", "evKudo");
       bar.appendChild(el("div", "", "💛 " + staffName(n.from_staff_id) + " ชม " + staffName(n.staff_id) + ": “" + n.note + "”"));
+      if (n.note_orig) bar.appendChild(el("div", "hint", "ต้นฉบับ: " + n.note_orig)); // เด็กพิมพ์ภาษาอื่น ระบบแปลเป็นไทยให้
       const r = el("div", "row"); r.style.margin = "6px 0 0";
       const sel = el("select", "field sm");
       evOnCrits().filter(c => c.id !== "punctual").forEach(c => { const o = el("option", "", c.th); o.value = c.id; sel.appendChild(o); });
@@ -1176,6 +1177,7 @@
       const first = g.rows[0].date, last = g.last;
       card.appendChild(el("b", "", staffName(g.staff_id) + " · " + fmtD(first) + (last !== first ? " – " + fmtD(last) + " (" + g.rows.length + " วัน)" : "")));
       card.appendChild(el("div", "hint", LEAVE_KIND[g.kind] + (g.note ? " · " + g.note : "") + " · ส่งเมื่อ " + fmt(g.rows[0].created_at)));
+      if (g.rows[0].note_orig) card.appendChild(el("div", "hint", "ต้นฉบับ: " + g.rows[0].note_orig));
       const r = el("div", "row");
       const ok = el("button", "btn green", "✅ อนุมัติ"); ok.onclick = () => decideLeave(g.rows.map(x => x.id), "approved");
       const no = el("button", "btn", "❌ ไม่อนุมัติ"); no.onclick = () => { if (confirm("ไม่อนุมัติวันลานี้?\nถ้าวันนั้นไม่มาทำงาน จะนับเป็นขาด")) decideLeave(g.rows.map(x => x.id), "rejected"); };
@@ -2694,6 +2696,7 @@
       const left = el("div");
       left.appendChild(el("div", "", staffName(a.staff_id) + " · " + baht(a.amount) + " บาท"));
       left.appendChild(el("div", "sub", thDate(a.date) + (a.item ? " · " + a.item : "") + " · พนักงานขอเอง"));
+      if (a.item_orig) left.appendChild(el("div", "sub", "ต้นฉบับ: " + a.item_orig));
       const right = el("div", "row"); right.style.margin = "0";
       const yes = el("button", "btn green", "✅ อนุมัติ"); yes.onclick = () => decideAdv(a.id, true);
       const no = el("button", "btn", "❌ ไม่อนุมัติ"); no.onclick = () => decideAdv(a.id, false);
