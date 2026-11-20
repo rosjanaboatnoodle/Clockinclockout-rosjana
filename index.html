@@ -852,9 +852,9 @@
   }
 
   // ---------- QR ติดผนัง ----------
-  // สแกน QR ที่ร้าน → หน้าได้รหัส QR มา ใช้ตอกเข้า/ออกได้ 1 ครั้งภายใน 10 นาที แล้วต้องสแกนใหม่
+  // สแกน QR ที่ร้าน → หน้าได้รหัส QR มา ใช้ตอกเข้า/ออกได้ 1 ครั้งภายใน 1 นาที แล้วต้องสแกนใหม่
   let QR_REQUIRED = false;
-  const SCAN_MINUTES = 10;
+  const SCAN_MINUTES = 1;
   function ssGet(k){ try{ return sessionStorage.getItem(k) || ""; } catch(e){ return ""; } }
   function ssSet(k, v){ try{ v ? sessionStorage.setItem(k, v) : sessionStorage.removeItem(k); } catch(e){} }
   function scanCode(){
