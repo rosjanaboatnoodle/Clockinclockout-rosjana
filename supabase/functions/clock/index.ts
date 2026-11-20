@@ -879,12 +879,14 @@ async function handlePunch(p: Record<string, unknown>) {
   if (kb.qr_required && !kb.viewer.kiosk && (type === "in" || type === "out") && !qrOk(kb, p)) return json({ ok: false, error: "scan_qr" });
   const pin = String(p.pin ?? "").trim();
   const lang = cleanLang(p.lang);
-  if (!/^\d{4,6}$/.test(pin)) return json({ ok: false, error: "pin_invalid" });
+  // a personal phone signed in as this person (name + PIN once) needs no PIN again
+  const signedIn = kb.viewer.staffId === staffId;
+  if (!signedIn && !/^\d{4,6}$/.test(pin)) return json({ ok: false, error: "pin_invalid" });
 
   const { data: person } = await supabase.from("staff")
     .select("id, branch_id, name, active, pin_hash").eq("id", staffId).maybeSingle();
   if (!person || !person.active || person.branch_id !== branchId) return json({ ok: false, error: "unknown_staff" });
-  const pinErr = await staffPinError(person, pin);
+  const pinErr = signedIn ? null : await staffPinError(person, pin);
   if (pinErr) return json({ ok: false, error: pinErr });
   const netErr = await ipError(kb, p, person.name);
   if (netErr) return json({ ok: false, error: netErr });
@@ -2167,14 +2169,15 @@ async function myShifts(b: BranchFull, s: StaffFull) {
 
 async function staffByPin(p: Record<string, unknown>): Promise<{ s: StaffFull; b: BranchFull } | string> {
   const pin = String(p.pin ?? "").trim();
-  if (!/^\d{4,6}$/.test(pin)) return "pin_invalid";
-  const { data: s } = await supabase.from("staff").select("id, branch_id, name, label, active, pay, period, pin_hash")
-    .eq("id", Number(p.staff_id) || 0).maybeSingle();
   const kb = await staffBranch(p);
   if (typeof kb === "string") return kb;
   if (kb.viewer.staffId && kb.viewer.staffId !== Number(p.staff_id)) return "not_you";
+  const signedIn = !!kb.viewer.staffId; // personal phone signed in as this person: no PIN again
+  if (!signedIn && !/^\d{4,6}$/.test(pin)) return "pin_invalid";
+  const { data: s } = await supabase.from("staff").select("id, branch_id, name, label, active, pay, period, pin_hash")
+    .eq("id", Number(p.staff_id) || 0).maybeSingle();
   if (!s || !s.active || s.branch_id !== kb.id) return "unknown_staff";
-  const pinErr = await staffPinError(s, pin);
+  const pinErr = signedIn ? null : await staffPinError(s, pin);
   if (pinErr) return pinErr;
   const b = await loadBranch(s.branch_id);
   if (!b) return "unknown_branch";

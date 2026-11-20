@@ -376,6 +376,7 @@
       showDeviceBox(null);
       document.getElementById("logoutRow").style.display = j.me ? "" : "none";
       IS_KIOSK = !!j.kiosk;
+      ME_ID = j.me || null;
       QR_REQUIRED = !!j.qr_required;
       applyBoot(j);
       if (scanCode() && !j.qr_ok){ ssSet("clock_scan", ""); showBanner(t("qrOld")); } // QR เก่า (แอดมินเปลี่ยนแล้ว)
@@ -434,10 +435,7 @@
     await bootstrap();
     await loadToday();
     const mine = ((currentBranch() || {}).staff || []);
-    if (mine.length === 1){
-      openPunch(mine[0]);
-      document.getElementById("pinInput").value = pin;
-    }
+    if (mine.length === 1) openPunch(mine[0]);
   }
 
   async function staffLogout(){
@@ -617,8 +615,14 @@
 
   // ---------- ตอกบัตร ----------
 
+  // มือถือที่เข้าสู่ระบบเป็นคนนี้แล้ว ไม่ต้องใส่ PIN อีก
+  let ME_ID = null;
+  function needPin(){ return !(ME_ID && current && current.id === ME_ID); }
+
   function openPunch(s){
     current = s;
+    document.getElementById("pinInput").style.display = needPin() ? "" : "none";
+    document.querySelector('[data-t="pinHint"]').textContent = needPin() ? t("pinHint") : t("signedInHint");
     document.getElementById("punchName").textContent = s.label;
     document.getElementById("pinInput").value = "";
     setResult("", "");
@@ -755,7 +759,7 @@
   async function punch(type){
     if (busy || !current) return;
     const pin = document.getElementById("pinInput").value.trim();
-    if (!/^\d{4,6}$/.test(pin)){ setResult(t("pinInvalid"), "err"); return; }
+    if (needPin() && !/^\d{4,6}$/.test(pin)){ setResult(t("pinInvalid"), "err"); return; }
     const b = currentBranch() || {};
     const extra = {};
     if (!IS_KIOSK && b.require_gps && b.lat !== null && b.lat !== undefined){
@@ -819,7 +823,7 @@
     const open = openPunchOf(current.id);
     if (!open) return;
     const pin = document.getElementById("pinInput").value.trim();
-    if (!/^\d{4,6}$/.test(pin)){ setResult(t("pinInvalid"), "err"); document.getElementById("pinInput").focus(); return; }
+    if (needPin() && !/^\d{4,6}$/.test(pin)){ setResult(t("pinInvalid"), "err"); document.getElementById("pinInput").focus(); return; }
     busy = true;
     const type = open.on_break ? "break_end" : "break_start";
     const j = await api({ action: "punch", key: KEY, staff_id: current.id, pin, type, lang });
@@ -953,7 +957,7 @@
   async function openMy(){
     if (!current) return;
     const pin = document.getElementById("pinInput").value.trim();
-    if (!/^\d{4,6}$/.test(pin)){ setResult(t("pinInvalid"), "err"); document.getElementById("pinInput").focus(); return; }
+    if (needPin() && !/^\d{4,6}$/.test(pin)){ setResult(t("pinInvalid"), "err"); document.getElementById("pinInput").focus(); return; }
     setResult("", "");
     const j = await api({ action: "my_summary", key: KEY, staff_id: current.id, pin, lang });
     if (!j || !j.ok){ setResult(errorText(j), "err"); return; }
