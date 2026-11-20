@@ -1,0 +1,32 @@
+# Netlify: เว็บนิ่ง ไม่มีขั้นตอน build ใช้ไฟล์ในโฟลเดอร์นี้ตรงๆ
+[build]
+  publish = "."
+
+# หน้าเว็บ ไฟล์ตั้งค่า และตัวรับแจ้งเตือน: ดึงใหม่ทุกครั้ง ผู้ใช้จะได้เห็นเวอร์ชันล่าสุดทันที
+[[headers]]
+  for = "/*"
+  [headers.values]
+    X-Frame-Options = "DENY"
+    X-Content-Type-Options = "nosniff"
+    Referrer-Policy = "same-origin"
+
+[[headers]]
+  for = "/*.html"
+  [headers.values]
+    Cache-Control = "no-cache"
+
+[[headers]]
+  for = "/"
+  [headers.values]
+    Cache-Control = "no-cache"
+
+[[headers]]
+  for = "/*.js"
+  [headers.values]
+    Cache-Control = "no-cache"
+
+[[headers]]
+  for = "/*.webmanifest"
+  [headers.values]
+    Cache-Control = "no-cache"
+    Content-Type = "application/manifest+json"
