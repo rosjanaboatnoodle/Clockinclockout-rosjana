@@ -1,6 +1,6 @@
 // Edge Function "clock" — ระบบตอกบัตร (ใช้ Supabase project เดียวกับปฏิทินได้ หรือใช้เดี่ยวๆ ก็ได้)
 //
-// Database: run supabase/migrations/0001_clock.sql … 0009_qr.sql in order.
+// Database: run supabase/migrations/0001_clock.sql … 0010_leave.sql in order.
 // Deploy: Supabase Dashboard -> Edge Functions -> create function named "clock" ->
 // paste this file's contents -> Deploy -> แท็บ Settings -> ปิด "Verify JWT with legacy secret"
 //
@@ -1378,12 +1378,13 @@ function shiftWindow(sh: Shift, date: string): { start: number; end: number } {
   return { start, end };
 }
 
-const AUTO_SHIFT_WINDOW_MIN = 240; // the guessed shift must start within 4 hours of the clock-in
+const AUTO_SHIFT_WINDOW_MIN = 240;
+const NO_SHOW_MIN = 60; // not in this long after the shift start, with no leave = no-show // the guessed shift must start within 4 hours of the clock-in
 
 // Which shift a person works on a date. Order: admin's pick for that day → weekly roster
 // → weekday pattern → their usual shift → guess from the clock-in time → none.
 function resolveShift(
-  rules: Pay, shifts: Shift[], rosterShift: number | null | undefined | "holiday", date: string,
+  rules: Pay, shifts: Shift[], rosterShift: number | null | undefined | "holiday" | "leave", date: string,
   firstIn: number | null, override: number | null | undefined,
 ): { shift: Shift | null; source: string } {
   const byId = (id: unknown) => shifts.find((s) => s.id === Number(id)) ?? null;
@@ -1392,6 +1393,7 @@ function resolveShift(
   }
   if (rules.work_mode !== "shift") return { shift: null, source: "none" };
   if (rosterShift === "holiday") return { shift: null, source: "holiday_off" };
+  if (rosterShift === "leave") return { shift: null, source: "leave_off" };
   if (rosterShift !== undefined) return rosterShift === null ? { shift: null, source: "roster_off" } : { shift: byId(rosterShift), source: "roster" };
   const nearest = (): Shift | null => {
     if (!rules.auto_shift || firstIn === null) return null;
@@ -1512,9 +1514,11 @@ function computeDay(
 }
 
 // Shifts, roster and breaks a set of days needs.
-// The roster value for resolveShift: the admin's pick for that day, else "holiday" when the shop is closed.
-function rosterFor(sc: { rosterMap: Map<string, number | null>; holidays?: Set<string> }, staffId: number, date: string): number | null | undefined | "holiday" {
+// The roster value for resolveShift: "leave" when the person asked for the day off, else the admin's
+// pick for that day, else "holiday" when the shop is closed.
+function rosterFor(sc: { rosterMap: Map<string, number | null>; holidays?: Set<string>; leaves?: Set<string> }, staffId: number, date: string): number | null | undefined | "holiday" | "leave" {
   const k = `${staffId}|${date}`;
+  if (sc.leaves?.has(k)) return "leave";
   if (sc.rosterMap.has(k)) return sc.rosterMap.get(k);
   return sc.holidays?.has(date) ? "holiday" : undefined;
 }
@@ -1532,7 +1536,14 @@ async function loadShiftContext(branchId: string, staffIds: number[], from: stri
   const { data: hol, error: holErr } = await supabase.from("schedule_entries").select("date")
     .eq("branch_id", branchId).eq("topic_id", "holiday").gte("date", from).lte("date", to);
   if (!holErr) for (const h of hol ?? []) holidays.add(String(h.date));
-  return { shifts: (shifts ?? []) as Shift[], rosterMap, breaks: (breaks ?? []) as BreakRow[], holidays };
+  // days off asked for (waiting or approved); nothing if 0010_leave.sql isn't run yet
+  const leaves = new Set<string>();
+  if (staffIds.length) {
+    const { data: lv, error: lvErr } = await supabase.from("leaves").select("staff_id, date, status")
+      .in("staff_id", staffIds).gte("date", from).lte("date", to);
+    if (!lvErr) for (const l of lv ?? []) if (l.status !== "rejected") leaves.add(`${l.staff_id}|${l.date}`);
+  }
+  return { shifts: (shifts ?? []) as Shift[], rosterMap, breaks: (breaks ?? []) as BreakRow[], holidays, leaves };
 }
 
 // One day for one person, with the shift worked out.
@@ -1583,10 +1594,12 @@ async function isLocked(staffId: number, date: string): Promise<boolean> {
 // ============================================================
 
 type StaffFull = { id: number; branch_id: string; name: string; label: string; active: boolean; pay: Record<string, unknown>; period: PeriodHist | null; pin_hash?: string | null };
-type BranchFull = { id: string; name: string; pay_defaults: Record<string, unknown>; period: PeriodHist; staff_advance: boolean; advance_auto_max: number };
+type BranchFull = { id: string; name: string; pay_defaults: Record<string, unknown>; period: PeriodHist; staff_advance: boolean; advance_auto_max: number; absent_from?: string | null };
 
 async function loadBranch(id: string): Promise<BranchFull | null> {
-  const { data } = await supabase.from("branches").select("id, name, pay_defaults, period, staff_advance, advance_auto_max").eq("id", id).maybeSingle();
+  const q = (cols: string) => supabase.from("branches").select(cols).eq("id", id).maybeSingle();
+  let { data, error } = await q("id, name, pay_defaults, period, staff_advance, advance_auto_max, absent_from");
+  if (error) ({ data } = await q("id, name, pay_defaults, period, staff_advance, advance_auto_max")); // 0010 not run yet
   return (data as BranchFull) ?? null;
 }
 
@@ -1632,6 +1645,19 @@ async function computeSummary(b: BranchFull, s: StaffFull, per: { start: string;
   const lastCounted = per.end < today ? per.end : today;
   const calendarDays = lastCounted >= per.start ? dayNum(lastCounted) - dayNum(per.start) + 1 : 0;
   const daysWorked = days.reduce((m, x) => m + x.day, 0);
+  // no-show: a day with a shift (not shop closed, no leave) and no clock-in, counted 1 hour after the shift start
+  const absentDates: string[] = [];
+  const nowMs = Date.now();
+  // only from the day absence tracking started (no counting back over days before the system was used)
+  const absentStart = b.absent_from && b.absent_from > per.start ? b.absent_from : (b.absent_from ? per.start : "9999-12-31");
+  if (rules.work_mode === "shift") {
+    for (let d = absentStart; d <= lastCounted; d = addDays(d, 1)) {
+      if (byDate.has(d)) continue;
+      const r = resolveShift(rules, sc.shifts, rosterFor(sc, s.id, d), d, null, undefined);
+      if (r.shift && shiftWindow(r.shift, d).start + NO_SHOW_MIN * 60000 <= nowMs) absentDates.push(d);
+    }
+  }
+  const leaveDates = [...sc.leaves].filter((k) => k.startsWith(`${s.id}|`)).map((k) => k.split("|")[1]).sort();
   return {
     staff_id: s.id, name: s.name, label: s.label || s.name, pay_type: rules.pay_type,
     rates: { daily_rate: rules.daily_rate, hourly_rate: rules.hourly_rate, ot_rate: days.find((x) => x.ot_rate)?.ot_rate ?? null },
@@ -1647,10 +1673,12 @@ async function computeSummary(b: BranchFull, s: StaffFull, per: { start: string;
       late_min: days.reduce((m, x) => m + x.late_min, 0),
       early_min: days.reduce((m, x) => m + x.early_min, 0),
       late_deduct: lateDeduct,
+      absent_days: absentDates.length, leave_days: leaveDates.length,
       base, ot_pay: otPay, gross: round2(base + otPay - lateDeduct),
       advances: advTotal, pending: sum(pending, "amount"), net: round2(base + otPay - lateDeduct - advTotal),
     },
     days,
+    absent_dates: absentDates, leave_dates: leaveDates,
     advances: (adv ?? []).filter((a) => a.status !== "rejected"),
   };
 }
@@ -2171,7 +2199,7 @@ async function myShifts(b: BranchFull, s: StaffFull) {
   for (let d = today; d <= to; d = addDays(d, 1)) {
     const k = `${s.id}|${d}`;
     const r = resolveShift(rules, sc.shifts, rosterFor(sc, s.id, d), d, null, undefined);
-    out.push({ date: d, shift: r.shift ? { name: r.shift.name, start: r.shift.start_time, end: r.shift.end_time, color: r.shift.color } : null, off: r.source.endsWith("_off"), closed: r.source === "holiday_off" });
+    out.push({ date: d, shift: r.shift ? { name: r.shift.name, start: r.shift.start_time, end: r.shift.end_time, color: r.shift.color } : null, off: r.source.endsWith("_off"), closed: r.source === "holiday_off", leave: r.source === "leave_off" });
   }
   return out;
 }
@@ -2214,6 +2242,8 @@ async function handleMySummary(p: Record<string, unknown>) {
     days_worked: sum.totals.days_worked,
     ot_hours: sum.totals.ot_hours,
     ot_on: effectivePay(who.b.pay_defaults, who.s.pay).ot_mode !== "none", // "ไม่มีโอที" = ไม่ต้องโชว์ช่องโอที
+    absent_days: sum.totals.absent_days,
+    leaves: await myLeaves(who.s.id, sum.period.start),
     advances: sum.advances.map((a) => ({ id: a.id, date: a.date, amount: Number(a.amount), item: a.item, status: a.status })),
     advances_total: sum.totals.advances,
     pending_total: sum.totals.pending,
@@ -2354,6 +2384,9 @@ const NT_TH: Record<string, string> = {
   ntAdvNo: "💵 คำขอเบิกไม่ได้รับอนุมัติ",
   ntAdvBody: "{amount} บาท {item}",
   ntDuty: "🧹 พรุ่งนี้มีเวรของคุณ",
+  ntLeaveOk: "📝 อนุมัติวันลาแล้ว",
+  ntLeaveNo: "📝 ไม่อนุมัติวันลา",
+  ntLeaveBody: "{dates} ติดต่อแอดมินถ้ามีคำถาม",
 };
 const ntCache = new Map<string, Record<string, string>>();
 async function ntText(lang: string, key: string, vars: Record<string, string> = {}): Promise<string> {
@@ -2404,6 +2437,8 @@ const NOTIFY_DEFAULTS = {
   admin_advance: true,                     // admin: someone asked for an advance
   admin_device: true,                      // admin: a new phone waits (device lock on)
   admin_late: true, absent_after_min: 15,  // admin: late, or not in this long after the shift start
+  admin_leave: true,                       // admin: someone asked for leave
+  leave_result: true,                      // staff: leave approved / rejected
 };
 type NotifyCfg = typeof NOTIFY_DEFAULTS;
 function notifyCfg(raw: unknown): NotifyCfg {
@@ -2502,6 +2537,10 @@ async function handleCronTick(p: Record<string, unknown>) {
       // admin: not in yet, some time after the start
       if (firstIn === null && now >= win.start + cfg.absent_after_min * 60000 && now < win.end && await onceKey(`absent:${s.id}:${today}`)) {
         sent += await pushAdmins(b.id, { title: "⚠️ ยังไม่มาทำงาน", body: `${name} · กะ ${r.shift.name} เริ่ม ${r.shift.start_time.slice(0, 5)}`, tag: "late" }, subs);
+      }
+      // admin: still not in an hour after the start, no leave = no-show
+      if (firstIn === null && now >= win.start + NO_SHOW_MIN * 60000 && now < win.end && await onceKey(`noshow:${s.id}:${today}`)) {
+        sent += await pushAdmins(b.id, { title: "🚫 ขาดไม่แจ้ง", body: `${name} · ไม่มาเกิน 1 ชม. และไม่ได้ขอลา (กะ ${r.shift.start_time.slice(0, 5)})`, tag: "late" }, subs);
       }
       // admin: came in late (same grace as the late rule)
       const lateMin = firstIn !== null ? Math.round((firstIn - win.start) / 60000) : 0;
@@ -2809,6 +2848,134 @@ async function handleDeviceHello(p: Record<string, unknown>) {
 }
 
 // ============================================================
+// Leave (ขอลา)
+// ============================================================
+
+const LEAVE_KINDS = ["sick", "personal", "other"];
+const LEAVE_TH: Record<string, string> = { sick: "ป่วย", personal: "ธุระ", other: "อื่นๆ" };
+const MAX_LEAVE_DAYS = 14;
+
+function leaveDates(p: Record<string, unknown>): string[] | string {
+  const from = String(p.from ?? ""), to = String(p.to ?? p.from ?? "");
+  if (!isIsoDate(from) || !isIsoDate(to) || to < from) return "bad_date";
+  const n = dayNum(to) - dayNum(from) + 1;
+  if (n > MAX_LEAVE_DAYS) return "too_many_days";
+  if (dayNum(from) < dayNum(localDate(new Date())) - 31) return "bad_date"; // a month back at most
+  return Array.from({ length: n }, (_, i) => addDays(from, i));
+}
+
+function dateRangeTh(dates: string[]): string {
+  const f = (d: string) => `${Number(d.slice(8))}/${Number(d.slice(5, 7))}`;
+  return dates.length > 1 ? `${f(dates[0])}–${f(dates[dates.length - 1])}` : f(dates[0]);
+}
+
+async function saveLeave(staffId: number, branchId: string, dates: string[], kind: string, note: string, status: string, by: string): Promise<string | null> {
+  for (const d of dates) if (await isLocked(staffId, d)) return "locked";
+  for (const d of dates) {
+    await supabase.from("leaves").delete().eq("staff_id", staffId).eq("date", d);
+    const { error } = await supabase.from("leaves").insert({
+      branch_id: branchId, staff_id: staffId, date: d, kind, note, status, created_by: by,
+      decided_at: status === "pending" ? null : new Date().toISOString(),
+    });
+    if (error) return "need_migration_0010";
+  }
+  return null;
+}
+
+// Staff: ask for days off (PIN, or a phone signed in as that person).
+async function handleRequestLeave(p: Record<string, unknown>) {
+  const who = await staffByPin(p);
+  if (typeof who === "string") return json({ ok: false, error: who });
+  const dates = leaveDates(p);
+  if (typeof dates === "string") return json({ ok: false, error: dates });
+  const kind = LEAVE_KINDS.includes(String(p.kind)) ? String(p.kind) : "other";
+  const note = String(p.note ?? "").trim().slice(0, 200);
+  const err = await saveLeave(who.s.id, who.b.id, dates, kind, note, "pending", "staff");
+  if (err) return json({ ok: false, error: err });
+  if ((await branchNotify(who.b.id)).admin_leave) {
+    await pushAdmins(who.b.id, { title: "📝 มีคนขอลา", body: `${who.s.label || who.s.name} ขอลา ${dateRangeTh(dates)} (${LEAVE_TH[kind]})${note ? " · " + note : ""}`, tag: "leave" });
+  }
+  return json({ ok: true, days: dates.length });
+}
+
+// Staff: take back a day off that hasn't happened yet.
+async function handleCancelLeave(p: Record<string, unknown>) {
+  const who = await staffByPin(p);
+  if (typeof who === "string") return json({ ok: false, error: who });
+  const { data: l } = await supabase.from("leaves").select("*").eq("id", Number(p.id) || 0).maybeSingle();
+  if (!l || l.staff_id !== who.s.id) return json({ ok: false, error: "not_found" });
+  if (l.date < localDate(new Date()) || await isLocked(l.staff_id, l.date)) return json({ ok: false, error: "locked" });
+  await supabase.from("leaves").delete().eq("id", l.id);
+  return json({ ok: true });
+}
+
+async function myLeaves(staffId: number, from: string) {
+  const { data, error } = await supabase.from("leaves").select("id, date, kind, note, status")
+    .eq("staff_id", staffId).gte("date", from).lte("date", addDays(localDate(new Date()), 60)).order("date");
+  return error ? [] : data ?? [];
+}
+
+// Admin: leave in a date range (all statuses), waiting ones first.
+async function handleListLeaves(p: Record<string, unknown>) {
+  { const g = await adminGate(p); if (g) return g; }
+  const branchId = String(p.branch_id ?? "");
+  const today = localDate(new Date());
+  const from = isIsoDate(String(p.from ?? "")) ? String(p.from) : addDays(today, -31);
+  const to = isIsoDate(String(p.to ?? "")) ? String(p.to) : addDays(today, 60);
+  const { data, error } = await supabase.from("leaves").select("*").eq("branch_id", branchId).gte("date", from).lte("date", to).order("date");
+  if (error) return json({ ok: false, error: "need_migration_0010" });
+  const br = await loadBranch(branchId);
+  return json({ ok: true, leaves: data ?? [], pending: (data ?? []).filter((l) => l.status === "pending").length, absent_from: br?.absent_from ?? null });
+}
+
+async function handleDecideLeave(p: Record<string, unknown>) {
+  { const g = await adminGate(p); if (g) return g; }
+  const ids = (Array.isArray(p.ids) ? p.ids : [p.id]).map(Number).filter(Boolean).slice(0, 31);
+  const status = p.status === "rejected" ? "rejected" : p.status === "delete" ? "delete" : "approved";
+  const { data: rows } = await supabase.from("leaves").select("*").in("id", ids);
+  if (!rows?.length) return json({ ok: false, error: "not_found" });
+  for (const l of rows) if (await isLocked(l.staff_id, l.date)) return json({ ok: false, error: "locked" });
+  if (status === "delete") await supabase.from("leaves").delete().in("id", ids);
+  else await supabase.from("leaves").update({ status, decided_at: new Date().toISOString() }).in("id", ids);
+  await logAdmin("decide_leave", { ids, status });
+  const first = rows[0];
+  if (status !== "delete" && first.created_by === "staff" && (await branchNotify(first.branch_id)).leave_result) {
+    const dates = rows.map((l) => String(l.date)).sort();
+    await pushStaff(first.staff_id, async (lang) => ({
+      title: await ntText(lang, status === "approved" ? "ntLeaveOk" : "ntLeaveNo"),
+      body: await ntText(lang, "ntLeaveBody", { dates: dateRangeTh(dates) }),
+      tag: "leave",
+    }));
+  }
+  return json({ ok: true });
+}
+
+// Admin: from which day "no-show" is counted.
+async function handleSaveAbsentFrom(p: Record<string, unknown>) {
+  { const g = await adminGate(p); if (g) return g; }
+  const d = String(p.date ?? "");
+  if (!isIsoDate(d)) return json({ ok: false, error: "bad_date" });
+  const { error } = await supabase.from("branches").update({ absent_from: d }).eq("id", String(p.branch_id ?? ""));
+  if (error) return json({ ok: false, error: "need_migration_0010" });
+  await logAdmin("save_absent_from", { branch: p.branch_id, date: d });
+  return json({ ok: true });
+}
+
+// Admin: record leave for someone (e.g. they phoned in). Approved straight away.
+async function handleAddLeave(p: Record<string, unknown>) {
+  { const g = await adminGate(p); if (g) return g; }
+  const { data: st } = await supabase.from("staff").select("id, branch_id").eq("id", Number(p.staff_id) || 0).maybeSingle();
+  if (!st) return json({ ok: false, error: "unknown_staff" });
+  const dates = leaveDates(p);
+  if (typeof dates === "string") return json({ ok: false, error: dates });
+  const kind = LEAVE_KINDS.includes(String(p.kind)) ? String(p.kind) : "other";
+  const err = await saveLeave(st.id, st.branch_id, dates, kind, String(p.note ?? "").trim().slice(0, 200), "approved", "admin");
+  if (err) return json({ ok: false, error: err });
+  await logAdmin("add_leave", { staff_id: st.id, dates });
+  return json({ ok: true, days: dates.length });
+}
+
+// ============================================================
 // Dispatch
 // ============================================================
 
@@ -2874,6 +3041,12 @@ const ACTIONS: Record<string, (p: Record<string, unknown>) => Promise<Response>>
   notify_settings: handleNotifySettings,
   save_notify: handleSaveNotify,
   cron_tick: handleCronTick,
+  request_leave: handleRequestLeave,
+  cancel_leave: handleCancelLeave,
+  list_leaves: handleListLeaves,
+  decide_leave: handleDecideLeave,
+  add_leave: handleAddLeave,
+  save_absent_from: handleSaveAbsentFrom,
 };
 
 Deno.serve(async (req) => {

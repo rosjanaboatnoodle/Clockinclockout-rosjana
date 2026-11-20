@@ -172,6 +172,7 @@
       <button class="tab" data-tab="shifts" onclick="showTab('shifts')">กะ</button>
       <button class="tab" data-tab="pay" onclick="showTab('pay')">เงิน</button>
       <button class="tab" data-tab="adv" onclick="showTab('adv')">เบิกเงิน<span class="count hidden" id="advCount"></span></button>
+      <button class="tab" data-tab="leave" onclick="showTab('leave')">ลา<span class="count hidden" id="leaveCount"></span></button>
       <button class="tab" data-tab="staff" onclick="showTab('staff')">พนักงาน</button>
       <button class="tab" data-tab="branches" onclick="showTab('branches')">สาขา<span class="count hidden" id="devCount"></span></button>
       <button class="tab" data-tab="lang" onclick="showTab('lang')">ภาษา</button>
@@ -328,6 +329,38 @@
       <div class="status" id="advSetStatus"></div>
     </div>
 
+    <!-- ลา -->
+    <div class="card hidden" data-panel="leave">
+      <div class="cardTitle">📝 คำขอลารออนุมัติ</div>
+      <div class="hint">วันที่ขอลาแล้ว (รอหรืออนุมัติ) ไม่นับเป็นขาดไม่แจ้ง · ไม่อนุมัติ = วันนั้นกลับไปนับตามกะปกติ (ถ้าไม่มา = ขาด)</div>
+      <div id="leavePending"></div>
+      <div class="status" id="leaveStatus"></div>
+      <div class="row" style="margin-top:10px;">
+        <span class="hint" style="margin:0;">นับ "ขาดไม่แจ้ง" ตั้งแต่วันที่</span>
+        <input class="field sm" id="absentFrom" type="date" style="min-width:150px;">
+        <button class="btn" onclick="saveAbsentFrom()">บันทึก</button>
+      </div>
+      <div class="hint">ขาดไม่แจ้ง = วันที่มีกะ แต่ไม่ตอกเข้าเกิน 1 ชม. และไม่ได้ขอลา (นับเฉพาะคนที่ตั้ง "มีกะ" · ไม่นับวันร้านหยุด)</div>
+    </div>
+
+    <div class="card hidden" data-panel="leave">
+      <div class="cardTitle">+ บันทึกลาแทนพนักงาน</div>
+      <div class="hint">เช่น โทรมาบอกว่าป่วย · บันทึกแล้วอนุมัติเลย</div>
+      <div class="grid2">
+        <label class="fl">พนักงาน<select class="field" id="lvStaff"></select></label>
+        <label class="fl">ประเภท<select class="field" id="lvKind"><option value="sick">ป่วย</option><option value="personal">ธุระ</option><option value="other">อื่นๆ</option></select></label>
+        <label class="fl">วันที่<input class="field" id="lvFrom" type="date"></label>
+        <label class="fl">ถึง<input class="field" id="lvTo" type="date"></label>
+      </div>
+      <div class="row"><input class="field" id="lvNote" placeholder="รายละเอียด (ไม่บังคับ)" maxlength="200"><button class="btn green" onclick="addLeave()">บันทึก</button></div>
+      <div class="status" id="lvStatus"></div>
+    </div>
+
+    <div class="card hidden" data-panel="leave">
+      <div class="cardTitle">วันลาทั้งหมด (ย้อนหลัง 1 เดือน – ล่วงหน้า 2 เดือน)</div>
+      <div class="tableWrap"><table id="leaveTable"></table></div>
+    </div>
+
     <!-- พนักงาน -->
     <div class="card hidden" data-panel="staff">
       <div class="cardTitle">พนักงานในสาขานี้</div>
@@ -423,7 +456,9 @@
       <div class="row"><span class="hint" style="margin:0;">ส่งตั้งแต่กี่โมง</span><input class="field sm" id="nDutyHour" type="number" min="0" max="23"></div>
       <label class="check"><input type="checkbox" id="nAdmAdv"> แอดมิน: มีคนขอเบิกเงิน</label>
       <label class="check"><input type="checkbox" id="nAdmDev"> แอดมิน: มีเครื่องใหม่รออนุญาต (ตอนเปิดล็อกกับเครื่อง)</label>
-      <label class="check"><input type="checkbox" id="nAdmLate"> แอดมิน: มาสาย / ยังไม่มาตามกะ</label>
+      <label class="check"><input type="checkbox" id="nAdmLate"> แอดมิน: มาสาย / ยังไม่มาตามกะ / ขาดไม่แจ้ง (ไม่มาเกิน 1 ชม.)</label>
+      <label class="check"><input type="checkbox" id="nAdmLeave"> แอดมิน: มีคนขอลา</label>
+      <label class="check"><input type="checkbox" id="nLeaveRes"> พนักงาน: ผลการขอลา (อนุมัติ/ไม่อนุมัติ)</label>
       <div class="row"><span class="hint" style="margin:0;">ยังไม่มาหลังเริ่มกะกี่นาที</span><input class="field sm" id="nAbsentMin" type="number" min="0" max="720"></div>
       <div class="hint">เตือนก่อนเข้ากะ / มาสาย / ยังไม่มา ใช้กับคนที่มีกะ (แท็บกะ) · วันที่ปฏิทินมี "วันหยุด" จะไม่เตือน</div>
       <div class="row"><button class="btn dark" onclick="saveNotify()">บันทึกการแจ้งเตือน</button></div>
@@ -554,7 +589,7 @@
 
 <div class="viewer" id="viewer" onclick="this.classList.remove('show')"><img id="viewerImg" alt=""></div>
 
-<script src="ui-text.js?v=20261120-2"></script><!-- แก้ ui-text.js แล้วเปลี่ยนเลข v ด้วย เครื่องเด็กจะได้โหลดไฟล์ใหม่ -->
+<script src="ui-text.js?v=20261121-1"></script><!-- แก้ ui-text.js แล้วเปลี่ยนเลข v ด้วย เครื่องเด็กจะได้โหลดไฟล์ใหม่ -->
 <script>
   // ใส่ค่าเดียวกับใน index.html
   const PROJECT_REF = "omsnqbuzyxyrsihybwmk";
@@ -694,7 +729,98 @@
     $("branchLink").value = b ? staffLink(b) : "";
     setMsg("linkStatus", "");
     // รายชื่อพนักงานต้องมาก่อน ส่วนอื่นใช้ชื่อจากรายชื่อนี้
-    loadStaff().then(() => { loadPunches(); loadReview(); loadPaySettings(); loadAccess(); loadNotify(); loadQr(); });
+    loadStaff().then(() => { loadPunches(); loadReview(); loadPaySettings(); loadAccess(); loadNotify(); loadQr(); loadLeaves(); });
+  }
+
+  // ---------- ลา ----------
+  const LEAVE_KIND = { sick: "ป่วย", personal: "ธุระ", other: "อื่นๆ" };
+  const LEAVE_ST = { pending: "รออนุมัติ", approved: "อนุมัติแล้ว", rejected: "ไม่อนุมัติ" };
+  let leaveRows = [];
+
+  async function loadLeaves(){
+    const want = branchId;
+    const j = await api({ action: "list_leaves", admin_pin: adminPin, branch_id: branchId });
+    if (want !== branchId) return;
+    if (!j || !j.ok){
+      $("leaveCount").classList.add("hidden");
+      setMsg("leaveStatus", j && j.error === "need_migration_0010" ? "ต้องรันไฟล์ 0010_leave.sql ใน Supabase ก่อน" : errText(j), false);
+      return;
+    }
+    leaveRows = j.leaves;
+    if (j.absent_from) $("absentFrom").value = j.absent_from;
+    $("leaveCount").textContent = j.pending;
+    $("leaveCount").classList.toggle("hidden", !j.pending);
+    renderLeaves();
+  }
+
+  function staffName(id){ const x = staffAll.find(s => s.id === id); return x ? (x.label || x.name) : "#" + id; }
+  function fmtD(d){ try{ return new Date(d + "T00:00:00").toLocaleDateString("th-TH", { weekday: "short", day: "numeric", month: "short" }); } catch(e){ return d; } }
+
+  function renderLeaves(){
+    // คำขอที่รอ: รวมวันติดกันของคนเดียวกันเป็นก้อนเดียว กดทีเดียวได้ทั้งก้อน
+    const box = $("leavePending"); box.innerHTML = "";
+    const pend = leaveRows.filter(l => l.status === "pending");
+    const groups = [];
+    pend.forEach(l => {
+      const g = groups.find(x => x.staff_id === l.staff_id && x.kind === l.kind && x.note === l.note && x.last === addD(l.date, -1));
+      if (g){ g.rows.push(l); g.last = l.date; } else groups.push({ staff_id: l.staff_id, kind: l.kind, note: l.note, last: l.date, rows: [l] });
+    });
+    if (!groups.length) box.appendChild(el("div", "hint", "ไม่มีคำขอที่รออยู่"));
+    groups.forEach(g => {
+      const card = el("div", "staffCard");
+      const first = g.rows[0].date, last = g.last;
+      card.appendChild(el("b", "", staffName(g.staff_id) + " · " + fmtD(first) + (last !== first ? " – " + fmtD(last) + " (" + g.rows.length + " วัน)" : "")));
+      card.appendChild(el("div", "hint", LEAVE_KIND[g.kind] + (g.note ? " · " + g.note : "") + " · ส่งเมื่อ " + fmt(g.rows[0].created_at)));
+      const r = el("div", "row");
+      const ok = el("button", "btn green", "✅ อนุมัติ"); ok.onclick = () => decideLeave(g.rows.map(x => x.id), "approved");
+      const no = el("button", "btn", "❌ ไม่อนุมัติ"); no.onclick = () => { if (confirm("ไม่อนุมัติวันลานี้?\nถ้าวันนั้นไม่มาทำงาน จะนับเป็นขาด")) decideLeave(g.rows.map(x => x.id), "rejected"); };
+      r.append(ok, no); card.appendChild(r);
+      box.appendChild(card);
+    });
+    const t = $("leaveTable"); t.innerHTML = "";
+    const head = el("tr"); ["วันที่", "พนักงาน", "ประเภท", "สถานะ", ""].forEach(h => head.appendChild(el("th", "", h))); t.appendChild(head);
+    leaveRows.slice().sort((a, b) => b.date.localeCompare(a.date)).forEach(l => {
+      const tr = el("tr");
+      tr.appendChild(el("td", "", fmtD(l.date)));
+      tr.appendChild(el("td", "", staffName(l.staff_id)));
+      tr.appendChild(el("td", "", LEAVE_KIND[l.kind] + (l.note ? " · " + l.note : "") + (l.created_by === "admin" ? " (แอดมินบันทึก)" : "")));
+      tr.appendChild(el("td", "", LEAVE_ST[l.status]));
+      const td = el("td");
+      const del = el("button", "btn", "ลบ"); del.onclick = () => { if (confirm("ลบวันลานี้?")) decideLeave([l.id], "delete"); };
+      td.appendChild(del); tr.appendChild(td);
+      t.appendChild(tr);
+    });
+    if (!leaveRows.length){ const tr = el("tr"); const td = el("td", "", "ยังไม่มีวันลา"); td.colSpan = 5; tr.appendChild(td); t.appendChild(tr); }
+  }
+
+  async function decideLeave(ids, status){
+    const j = await api({ action: "decide_leave", admin_pin: adminPin, ids, status });
+    if (!j || !j.ok){ setMsg("leaveStatus", errText(j), false); return; }
+    await loadLeaves();
+    setMsg("leaveStatus", status === "approved" ? "อนุมัติแล้ว" : status === "rejected" ? "ไม่อนุมัติแล้ว" : "ลบแล้ว", true);
+  }
+
+  function fillLeaveForm(){
+    const sel = $("lvStaff"); sel.innerHTML = "";
+    staffAll.filter(s => s.active).forEach(s => { const o = el("option", "", s.label || s.name); o.value = s.id; sel.appendChild(o); });
+    const today = localDateStr(new Date());
+    if (!$("lvFrom").value) $("lvFrom").value = today;
+    if (!$("lvTo").value) $("lvTo").value = today;
+  }
+
+  async function saveAbsentFrom(){
+    const j = await api({ action: "save_absent_from", admin_pin: adminPin, branch_id: branchId, date: $("absentFrom").value });
+    setMsg("leaveStatus", j && j.ok ? "บันทึกแล้ว ยอดเงินจะนับขาดตั้งแต่วันนี้" : errText(j), !!(j && j.ok));
+  }
+
+  async function addLeave(){
+    const from = $("lvFrom").value, to = $("lvTo").value || from;
+    if (!from || to < from){ setMsg("lvStatus", "วันที่ไม่ถูกต้อง", false); return; }
+    const j = await api({ action: "add_leave", admin_pin: adminPin, staff_id: Number($("lvStaff").value), from, to, kind: $("lvKind").value, note: $("lvNote").value.trim() });
+    if (!j || !j.ok){ setMsg("lvStatus", j && j.error === "too_many_days" ? "ครั้งละไม่เกิน 14 วัน" : errText(j), false); return; }
+    $("lvNote").value = "";
+    await loadLeaves();
+    setMsg("lvStatus", "บันทึกแล้ว " + j.days + " วัน", true);
   }
 
   // ---------- QR ติดผนัง ----------
@@ -781,7 +907,7 @@
   // ---------- แจ้งเตือน ----------
   let notifyData = null;
   const NFIELDS = [["nRemind", "remind"], ["nForgot", "forgot"], ["nAdv", "advance_result"], ["nDuty", "duty"],
-    ["nAdmAdv", "admin_advance"], ["nAdmDev", "admin_device"], ["nAdmLate", "admin_late"]];
+    ["nAdmAdv", "admin_advance"], ["nAdmDev", "admin_device"], ["nAdmLate", "admin_late"], ["nAdmLeave", "admin_leave"], ["nLeaveRes", "leave_result"]];
   const NNUMS = [["nRemindMin", "remind_min"], ["nForgotMin", "forgot_after_min"], ["nDutyHour", "duty_hour"], ["nAbsentMin", "absent_after_min"]];
 
   async function loadNotify(){
@@ -1771,7 +1897,7 @@
         const c = j.cells[person.id + "|" + d] || {};
         const td = el("td", d === today ? "today" : "");
         const sel = el("select", c.set ? "set" : "");
-        const usual = c.set ? "ตามปกติ" : (c.shift_id ? nameOf(c.shift_id) : (c.source === "holiday_off" ? "🏖️ ร้านหยุด" : String(c.source).endsWith("_off") ? "หยุด" : "—"));
+        const usual = c.set ? "ตามปกติ" : (c.shift_id ? nameOf(c.shift_id) : (c.source === "leave_off" ? "📝 ลา" : c.source === "holiday_off" ? "🏖️ ร้านหยุด" : String(c.source).endsWith("_off") ? "หยุด" : "—"));
         const o0 = el("option", "", c.set ? "↺ ตามปกติ" : usual); o0.value = "clear"; sel.appendChild(o0);
         j.shifts.forEach(sh => { const o = el("option", "", sh.name); o.value = String(sh.id); sel.appendChild(o); });
         const off = el("option", "", "หยุด"); off.value = "off"; sel.appendChild(off);
@@ -2091,7 +2217,8 @@
         ["ค่าแรง", baht(t.base)], ["โอที", baht(t.ot_pay)],
         ["มาสาย", t.late_times ? t.late_times + " ครั้ง / " + t.late_min + " น." : "0"], ["หักสาย", (t.late_deduct ? "−" : "") + baht(t.late_deduct)],
         ["ชม.พัก", String(t.break_hours || 0)], ["กลับก่อน", (t.early_min || 0) + " น."],
-        ["เบิก", (t.advances ? "−" : "") + baht(t.advances)], ["รออนุมัติ", baht(t.pending)]
+        ["เบิก", (t.advances ? "−" : "") + baht(t.advances)], ["รออนุมัติ", baht(t.pending)],
+        ["ขาดไม่แจ้ง", String(t.absent_days || 0)], ["ลา", String(t.leave_days || 0)]
       ]);
       const acts = el("div", "row"); acts.style.margin = "8px 0 0";
       const bb = el("button", "btn", "📄 บิล"); bb.onclick = () => openBill(p.staff_id, p.period.start);
@@ -2289,6 +2416,7 @@
     if (name === "shifts"){ loadPaySettings().then(() => { renderShiftList(); loadRoster(); }); }
     if (name === "adv"){ loadPaySettings(); loadAdvances(); }
     if (name === "branches"){ loadAccess(); loadNotify(); loadQr(); }
+    if (name === "leave"){ fillLeaveForm(); loadLeaves(); }
   }
 
   $("loginPin").addEventListener("keydown", e => { if (e.key === "Enter") doLogin(); });

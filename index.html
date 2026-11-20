@@ -139,6 +139,10 @@
   .reqRow{ display:flex; gap:6px; margin-top:6px; }
   .reqRow input{ flex:1; min-width:0; padding:10px; border-radius:10px; border:2px solid #e5e7eb; font-size:15px; font-family:inherit; }
   .chips{ display:flex; gap:6px; flex-wrap:wrap; margin-top:6px; }
+  .chip.on{ background:#3730a3; color:#fff; border-color:#3730a3; }
+  .leaveBox{ margin-top:12px; padding-top:10px; border-top:1px dashed #e5e7eb; }
+  .leaveDates{ display:flex; gap:6px; align-items:center; margin-top:6px; font-weight:800; font-size:13px; color:#475569; }
+  .leaveDates input{ flex:1; min-width:0; padding:9px; border-radius:10px; border:2px solid #e5e7eb; font-size:15px; font-family:inherit; }
   .chip{ border:1px solid #c7d2fe; background:#eef2ff; color:#3730a3; border-radius:999px; padding:6px 10px; font-weight:800; font-size:13px; cursor:pointer; }
   .sendBtn{ border:none; border-radius:10px; padding:10px 14px; font-weight:900; background:#0f9b6b; color:#fff; cursor:pointer; }
   .photoPreview{ width:64px; height:64px; border-radius:10px; object-fit:cover; display:none; flex:none; }
@@ -281,7 +285,7 @@
   </div>
 </div>
 
-<script src="ui-text.js?v=20261120-2"></script><!-- แก้ ui-text.js แล้วเปลี่ยนเลข v ด้วย เครื่องเด็กจะได้โหลดไฟล์ใหม่ -->
+<script src="ui-text.js?v=20261121-1"></script><!-- แก้ ui-text.js แล้วเปลี่ยนเลข v ด้วย เครื่องเด็กจะได้โหลดไฟล์ใหม่ -->
 <script>
   // ข้อมูลอยู่ใน Supabase (Edge Function "clock") ดูวิธีตั้งค่าใน README.md
   // ใส่ค่าจาก Supabase Dashboard -> Project Settings -> API:
@@ -894,7 +898,7 @@
       row.appendChild(el("div", "weekDay", dayLabel(d.date)));
       const items = el("div", "weekItems");
       if (d.shift){ const g = el("span", "tag", d.shift.name + " " + d.shift.start + "–" + d.shift.end); g.style.background = d.shift.color || "#6366f1"; items.appendChild(g); }
-      else items.appendChild(el("span", "weekNone", d.closed ? t("shopClosed") : d.off ? t("dayOff") : t("noShiftSet")));
+      else items.appendChild(el("span", "weekNone", d.leave ? t("onLeave") : d.closed ? t("shopClosed") : d.off ? t("dayOff") : t("noShiftSet")));
       row.appendChild(items);
       wrap.appendChild(row);
     });
@@ -1011,6 +1015,69 @@
     renderDuties(j.my_duties);
   }
 
+  // ---------- ขอลา ----------
+  function renderLeave(box, j, pin){
+    const wrap = el("div", "leaveBox");
+    wrap.appendChild(el("div", "cardTitle", t("leaveTitle")));
+    const today = shopToday();
+    const from = el("input"); from.type = "date"; from.value = today;
+    const to = el("input"); to.type = "date"; to.value = today;
+    from.onchange = () => { if (to.value < from.value) to.value = from.value; };
+    const dates = el("div", "leaveDates");
+    dates.append(from, el("span", "", t("leaveTo")), to);
+    wrap.appendChild(dates);
+    let kind = "sick";
+    const chips = el("div", "chips");
+    [["sick", "leaveSick"], ["personal", "leavePersonal"], ["other", "leaveOther"]].forEach(([k, label]) => {
+      const c = el("button", "chip" + (k === kind ? " on" : ""), t(label));
+      c.onclick = () => { kind = k; chips.querySelectorAll(".chip").forEach(x => x.classList.remove("on")); c.classList.add("on"); };
+      chips.appendChild(c);
+    });
+    wrap.appendChild(chips);
+    const row = el("div", "reqRow");
+    const note = el("input"); note.placeholder = t("leaveNotePh"); note.maxLength = 200;
+    const send = el("button", "sendBtn", t("leaveSend"));
+    row.append(note, send);
+    wrap.appendChild(row);
+    const msg = el("div", "result");
+    wrap.appendChild(msg);
+    send.onclick = async () => {
+      if (!from.value || !to.value || to.value < from.value){ msg.textContent = t("leaveBadDate"); msg.className = "result err"; return; }
+      send.disabled = true;
+      const r = await api({ action: "request_leave", key: KEY, staff_id: current.id, pin, from: from.value, to: to.value, kind, note: note.value.trim() });
+      send.disabled = false;
+      if (!r || !r.ok){ msg.textContent = r && r.error === "too_many_days" ? t("leaveTooLong") : r && (r.error === "bad_date") ? t("leaveBadDate") : errorText(r); msg.className = "result err"; return; }
+      await openMy(true);
+      const m2 = document.querySelector("#myBox .leaveBox .result");
+      if (m2){ m2.textContent = t("leaveSent"); m2.className = "result ok"; }
+    };
+    // วันลาของฉัน
+    const list = (j.leaves || []);
+    if (list.length){
+      wrap.appendChild(el("div", "fine", t("leaveMine"))).style.marginTop = "8px";
+      list.forEach(l => {
+        const r = el("div", "advRow");
+        r.appendChild(el("span", "", fmtDay(l.date) + " · " + t({ sick: "leaveSick", personal: "leavePersonal", other: "leaveOther" }[l.kind] || "leaveOther") + (l.note ? " · " + l.note : "")));
+        const right = el("span");
+        const key = { pending: "statusPending", approved: "statusApproved", rejected: "statusRejected" }[l.status];
+        right.appendChild(el("span", "st " + l.status, t(key)));
+        if (l.date >= today && l.status !== "rejected"){
+          const x = el("button", "linkBtn", t("leaveCancel"));
+          x.style.padding = "2px 8px"; x.style.marginLeft = "6px";
+          x.onclick = async () => {
+            if (!confirm(t("leaveCancelAsk"))) return;
+            const rr = await api({ action: "cancel_leave", key: KEY, staff_id: current.id, pin, id: l.id });
+            if (rr && rr.ok) openMy(true);
+          };
+          right.appendChild(x);
+        }
+        r.appendChild(right);
+        wrap.appendChild(r);
+      });
+    }
+    box.appendChild(wrap);
+  }
+
   function renderMy(j, pin){
     const box = document.getElementById("myBox");
     box.innerHTML = "";
@@ -1023,6 +1090,7 @@
     stat(fmtBaht(j.advances_total), t("myAdvanced"));
     stat(fmtBaht(j.pending_total), t("myPending"));
     if (j.late_times) stat(String(j.late_times), t("lateTimes"));
+    if (j.absent_days) stat(String(j.absent_days), t("absentDays"));
     box.appendChild(stats);
     if (!IS_KIOSK) box.appendChild(pushRow(pin));
     if (!j.advances.length) box.appendChild(el("div", "empty", t("noAdvances")));
@@ -1036,6 +1104,7 @@
       row.appendChild(right);
       box.appendChild(row);
     });
+    renderLeave(box, j, pin);
     if (!j.staff_advance){ box.appendChild(el("div", "fine", t("advanceOff"))); return; }
 
     box.appendChild(el("div", "cardTitle", t("requestTitle"))).style.marginTop = "10px";
