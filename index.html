@@ -1019,7 +1019,7 @@
     const stats = el("div", "myStats");
     const stat = (v, label) => { const d = el("div", "myStat"); d.appendChild(el("b", "", v)); d.appendChild(el("span", "", label)); stats.appendChild(d); };
     stat(String(j.days_worked), t("myDays") + " (" + t("myDaysUnit") + ")");
-    stat(String(j.ot_hours), t("myOt") + " (" + t("myOtUnit") + ")");
+    if (j.ot_on !== false || j.ot_hours) stat(String(j.ot_hours), t("myOt") + " (" + t("myOtUnit") + ")"); // ตั้ง "ไม่มีโอที" = ไม่โชว์
     stat(fmtBaht(j.advances_total), t("myAdvanced"));
     stat(fmtBaht(j.pending_total), t("myPending"));
     if (j.late_times) stat(String(j.late_times), t("lateTimes"));

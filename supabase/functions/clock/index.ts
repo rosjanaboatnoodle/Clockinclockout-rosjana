@@ -2213,6 +2213,7 @@ async function handleMySummary(p: Record<string, unknown>) {
     period: { start: sum.period.start, end: sum.period.end },
     days_worked: sum.totals.days_worked,
     ot_hours: sum.totals.ot_hours,
+    ot_on: effectivePay(who.b.pay_defaults, who.s.pay).ot_mode !== "none", // "ไม่มีโอที" = ไม่ต้องโชว์ช่องโอที
     advances: sum.advances.map((a) => ({ id: a.id, date: a.date, amount: Number(a.amount), item: a.item, status: a.status })),
     advances_total: sum.totals.advances,
     pending_total: sum.totals.pending,
