@@ -614,7 +614,7 @@
     setResult("", "");
     document.getElementById("punchMsgs").innerHTML = "";
     const b = currentBranch() || {};
-    const needGps = !!(b.require_gps && b.lat !== null && b.lat !== undefined);
+    const needGps = !IS_KIOSK && !!(b.require_gps && b.lat !== null && b.lat !== undefined); // เครื่องกลางร้านไม่ต้องใช้ตำแหน่ง
     document.getElementById("gpsStatus").style.display = needGps ? "" : "none";
     document.getElementById("photoBox").style.display = b.require_photo ? "" : "none";
     document.getElementById("privacyNote").style.display = (needGps || b.require_photo) ? "" : "none";
@@ -748,7 +748,7 @@
     if (!/^\d{4,6}$/.test(pin)){ setResult(t("pinInvalid"), "err"); return; }
     const b = currentBranch() || {};
     const extra = {};
-    if (b.require_gps && b.lat !== null && b.lat !== undefined){
+    if (!IS_KIOSK && b.require_gps && b.lat !== null && b.lat !== undefined){
       if (!fix){ setResult(t("gpsFinding"), "err"); return; }
       Object.assign(extra, { lat: fix.lat, lng: fix.lng, accuracy: fix.accuracy });
     }

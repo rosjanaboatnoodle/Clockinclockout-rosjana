@@ -885,7 +885,8 @@ async function handlePunch(p: Record<string, unknown>) {
   const { data: branch } = await supabase.from("branches")
     .select("id, lat, lng, radius_m, require_gps, require_photo").eq("id", branchId).maybeSingle();
   if (!branch) return json({ ok: false, error: "unknown_branch" });
-  const loc = checkLocation(branch as BranchGeo, p);
+  // the shop's shared tablet stays in the shop: no location needed
+  const loc = checkLocation({ ...(branch as BranchGeo), require_gps: kb.viewer.kiosk ? false : !!branch.require_gps }, p);
   if (!loc.ok) return json(loc);
   const photo = String(p.photo ?? "");
   if (branch.require_photo && !photo) return json({ ok: false, error: "photo_required" });
