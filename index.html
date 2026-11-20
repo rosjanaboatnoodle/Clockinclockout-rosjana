@@ -104,6 +104,7 @@
   .weekNone{ color:var(--muted); font-weight:800; font-size:13px; }
   .moreBtn{ display:block; width:100%; margin-top:6px; border:none; background:transparent; color:#4338ca; font-weight:900; font-size:13px; padding:6px; cursor:pointer; }
   .pushRow{ margin:10px 0 4px; }
+  .qrNeed{ background:#eef2ff; color:#3730a3; border-radius:12px; padding:14px; font-weight:900; text-align:center; font-size:15px; margin:8px 0; line-height:1.5; }
   .pushRow .sendBtn{ width:100%; }
   .linkBtn{ border:none; background:#fff; color:#4338ca; font-weight:900; font-size:13px; border-radius:999px; padding:7px 12px; cursor:pointer; }
   .cardHead{ display:flex; justify-content:space-between; align-items:center; gap:8px; margin-bottom:6px; }
@@ -195,6 +196,7 @@
     </div>
 
     <div id="mainCards">
+    <div class="banner" id="qrHint" style="display:none;"></div>
 
     <div class="card" id="msgCard" style="display:none;">
       <div class="cardTitle" data-t="todayTitle">📌 วันนี้</div>
@@ -238,7 +240,8 @@
       <img class="photoPreview" id="photoPreview" alt="">
       <input id="photoInput" type="file" accept="image/*" capture="user" style="display:none;" onchange="onPhoto(this)">
     </div>
-    <div class="btnRow">
+    <div class="qrNeed" id="qrNeed" style="display:none;"></div>
+    <div class="btnRow" id="punchRow">
       <button class="btn btnIn" id="btnIn" onclick="punch('in')" data-t="clockIn">✅ เข้างาน</button>
       <button class="btn btnOut" id="btnOut" onclick="punch('out')" data-t="clockOut">⬛ ออกงาน</button>
     </div>
@@ -350,7 +353,7 @@
     const cacheKey = "clock_boot_" + lang + "_" + KEY;
     const cached = KEY ? lsGet(cacheKey) : null;
     if (cached){ try{ applyBoot(JSON.parse(cached)); } catch(e){} }
-    const j = await api({ action: "bootstrap", lang, key: KEY });
+    const j = await api({ action: "bootstrap", lang, key: KEY, qr: scanCode() });
     if (j && j.ok){
       if (j.bad_link){
         // แอดมินเปลี่ยนลิงก์แล้ว: ลืมรหัสเก่าและข้อมูลที่เก็บไว้
@@ -372,7 +375,10 @@
       showDeviceBox(null);
       document.getElementById("logoutRow").style.display = j.me ? "" : "none";
       IS_KIOSK = !!j.kiosk;
+      QR_REQUIRED = !!j.qr_required;
       applyBoot(j);
+      if (scanCode() && !j.qr_ok){ ssSet("clock_scan", ""); showBanner(t("qrOld")); } // QR เก่า (แอดมินเปลี่ยนแล้ว)
+      updateQrGate();
       if (KEY) lsSet(cacheKey, JSON.stringify({ branches: j.branches, dict: j.dict, has_admin: j.has_admin, tz: j.tz }));
     } else if (!cached){
       showBanner(t("connectFail"));
@@ -614,6 +620,7 @@
     document.getElementById("privacyNote").style.display = (needGps || b.require_photo) ? "" : "none";
     clearPhoto();
     renderBreakRow();
+    updateQrGate();
     document.getElementById("myBox").style.display = "none";
     document.getElementById("dutyBox").style.display = "none";
     if (needGps) startGps(b);
@@ -721,6 +728,7 @@
     gps_required: "gpsRequired", photo_required: "photoRequired", bad_photo: "photoFail", photo_too_large: "photoFail",
     too_many_tries: "tooManyTries", bad_link: "badLink", ip_not_allowed: "ipNotAllowed",
     device_pending: "devicePendingTitle", device_blocked: "deviceBlockedTitle",
+    scan_qr: "qrNeed",
     need_login: "loginTitle", not_you: "notYou", name_not_found: "nameNotFound", name_ambiguous: "nameAmbiguous",
     unknown_staff: "nameNotFound"
   };
@@ -752,16 +760,18 @@
     document.getElementById("btnIn").disabled = true;
     document.getElementById("btnOut").disabled = true;
     setResult(t("saving"), "");
-    const j = await api(Object.assign({ action: "punch", key: KEY, staff_id: current.id, pin, type, lang }, extra));
+    const j = await api(Object.assign({ action: "punch", key: KEY, staff_id: current.id, pin, type, lang, qr: scanCode() }, extra));
     busy = false;
     document.getElementById("btnIn").disabled = false;
     document.getElementById("btnOut").disabled = false;
     if (!j || !j.ok){
+      if (j && j.error === "scan_qr") clearScan();
       setResult(errorText(j), "err");
       if (j && j.error === "wrong_pin") document.getElementById("pinInput").select();
       return;
     }
     document.getElementById("pinInput").value = "";
+    if (QR_REQUIRED && !IS_KIOSK) clearScan(); // ตอกแล้ว ครั้งต่อไปต้องสแกนใหม่
     clearPhoto(); // รูปใช้ได้ครั้งเดียว ตอกครั้งต่อไปต้องถ่ายใหม่
     const time = fmtTime(type === "in" ? j.punch.check_in : j.punch.check_out);
     const okText = j.status === "ok_out" ? t("successOut") : (j.status === "ok_in_after_forgot" ? t("successInForgot") : t("successIn"));
@@ -839,6 +849,29 @@
   function fmtDay(d){
     try{ return new Intl.DateTimeFormat(LOCALE[lang], { day: "numeric", month: "short" }).format(new Date(d + "T00:00:00")); }
     catch(e){ return d; }
+  }
+
+  // ---------- QR ติดผนัง ----------
+  // สแกน QR ที่ร้าน → หน้าได้รหัส QR มา ใช้ตอกเข้า/ออกได้ 1 ครั้งภายใน 10 นาที แล้วต้องสแกนใหม่
+  let QR_REQUIRED = false;
+  const SCAN_MINUTES = 10;
+  function ssGet(k){ try{ return sessionStorage.getItem(k) || ""; } catch(e){ return ""; } }
+  function ssSet(k, v){ try{ v ? sessionStorage.setItem(k, v) : sessionStorage.removeItem(k); } catch(e){} }
+  function scanCode(){
+    try{
+      const s = JSON.parse(ssGet("clock_scan") || "null");
+      return s && Date.now() - s.at < SCAN_MINUTES * 60000 ? s.q : "";
+    } catch(e){ return ""; }
+  }
+  function clearScan(){ ssSet("clock_scan", ""); updateQrGate(); }
+  function updateQrGate(){
+    const need = QR_REQUIRED && !scanCode();
+    document.getElementById("qrNeed").style.display = need ? "" : "none";
+    document.getElementById("qrNeed").textContent = t("qrNeed");
+    document.getElementById("punchRow").style.display = need ? "none" : "";
+    const hint = document.getElementById("qrHint");
+    hint.style.display = QR_REQUIRED ? "" : "none";
+    hint.textContent = need ? t("qrNeed") : t("qrReady", { m: SCAN_MINUTES });
   }
 
   // ---------- แจ้งเตือน (เปิดบนมือถือของตัวเองเท่านั้น ไม่ใช่เครื่องกลางร้าน) ----------
@@ -1114,6 +1147,12 @@
       KEY = lsGet("clock_key") || "";
       // มีรหัสที่จำไว้ ใส่กลับเข้าไปในลิงก์ของหน้า ให้กดเพิ่มลงหน้าจอโฮมแล้วได้สาขาเดิม
       if (KEY){ const u = new URL(location.href); u.searchParams.set("b", KEY); history.replaceState(null, "", u); }
+    }
+    // มาจากการสแกน QR ที่ร้าน: จำไว้ชั่วคราว แล้วเอารหัสออกจากลิงก์ (ไม่ให้ติดไปกับไอคอน/บุ๊กมาร์ก)
+    const q = new URLSearchParams(location.search).get("q");
+    if (q && /^[a-f0-9]{16,64}$/i.test(q)){
+      ssSet("clock_scan", JSON.stringify({ q: q.toLowerCase(), at: Date.now() }));
+      const u = new URL(location.href); u.searchParams.delete("q"); history.replaceState(null, "", u);
     }
     const saved = lsGet("clock_lang");
     lang = LOCALE[saved] ? saved : "th";

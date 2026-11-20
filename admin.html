@@ -374,6 +374,30 @@
       <div class="status" id="brStatus"></div>
     </div>
 
+    <!-- QR ติดผนัง -->
+    <div class="card hidden" data-panel="branches">
+      <div class="cardTitle">📷 QR ติดผนัง</div>
+      <div class="hint">ปริ้น QR 2 อันติดในร้าน: 📶 ต่อ WiFi ร้าน และ ⏱️ ตอกบัตร · พนักงานสแกนแล้วตอกบัตรได้เลย</div>
+      <label class="check"><input type="checkbox" id="qrRequired"> ต้องสแกน QR ทุกครั้งที่ตอกเข้า/ออก (เครื่องกลางร้านไม่ต้องสแกน)</label>
+      <div class="hint" id="qrIpWarn" style="color:#b45309; font-weight:800;"></div>
+      <div class="cardTitle" style="margin-top:10px; font-size:14px;">WiFi ร้าน (สำหรับ QR ต่อ WiFi)</div>
+      <div class="grid2">
+        <label class="fl">ชื่อ WiFi<input class="field" id="wifiSsid" maxlength="64" autocomplete="off"></label>
+        <label class="fl">รหัส WiFi<input class="field" id="wifiPass" maxlength="64" autocomplete="off"></label>
+        <label class="fl">ชนิด
+          <select class="field" id="wifiType"><option value="WPA">WPA/WPA2/WPA3 (ทั่วไป)</option><option value="WEP">WEP (เก่า)</option><option value="nopass">ไม่มีรหัส</option></select>
+        </label>
+      </div>
+      <label class="check"><input type="checkbox" id="wifiHidden"> WiFi ซ่อนชื่อ (hidden)</label>
+      <div class="row" style="margin-top:8px;">
+        <button class="btn dark" onclick="saveQr(false)">บันทึก</button>
+        <button class="btn green" onclick="printQr()">🖨️ ปริ้น QR</button>
+        <button class="btn" onclick="saveQr(true)">เปลี่ยน QR</button>
+      </div>
+      <div class="hint">"เปลี่ยน QR" = QR ตอกบัตรอันเก่าใช้ไม่ได้ทันที ต้องปริ้นอันใหม่ติดแทน (เช่น ถ้ามีคนเอารูป QR ไปแจก)</div>
+      <div class="status" id="qrStatus"></div>
+    </div>
+
     <!-- แจ้งเตือน -->
     <div class="card hidden" data-panel="branches">
       <div class="cardTitle">🔔 แจ้งเตือน</div>
@@ -669,7 +693,83 @@
     $("branchLink").value = b ? staffLink(b) : "";
     setMsg("linkStatus", "");
     // รายชื่อพนักงานต้องมาก่อน ส่วนอื่นใช้ชื่อจากรายชื่อนี้
-    loadStaff().then(() => { loadPunches(); loadReview(); loadPaySettings(); loadAccess(); loadNotify(); });
+    loadStaff().then(() => { loadPunches(); loadReview(); loadPaySettings(); loadAccess(); loadNotify(); loadQr(); });
+  }
+
+  // ---------- QR ติดผนัง ----------
+  let qrData = null;
+
+  async function loadQr(){
+    const want = branchId;
+    const j = await api({ action: "qr_settings", admin_pin: adminPin, branch_id: branchId });
+    if (want !== branchId) return;
+    if (!j || !j.ok){ qrData = null; setMsg("qrStatus", j && j.error === "need_migration_0009" ? "ต้องรันไฟล์ 0009_qr.sql ใน Supabase ก่อน" : errText(j), false); return; }
+    qrData = j;
+    $("qrRequired").checked = !!j.qr_required;
+    $("wifiSsid").value = j.wifi.ssid || "";
+    $("wifiPass").value = j.wifi.pass || "";
+    $("wifiType").value = j.wifi.type || "WPA";
+    $("wifiHidden").checked = !!j.wifi.hidden;
+    $("qrIpWarn").textContent = j.require_ip ? "" : "⚠️ ยังไม่ได้เปิด \"ตอกบัตรได้เฉพาะตอนต่อ WiFi ของร้าน\" (การ์ดล็อกเพิ่มด้านล่าง): ถ้าไม่เปิด คนที่ถ่ายรูป QR ไว้ จะเอาไปสแกนตอกที่อื่นได้";
+  }
+
+  async function saveQr(rotate){
+    if (rotate && !confirm("เปลี่ยน QR ตอกบัตร?\nQR ที่ปริ้นติดไว้จะใช้ไม่ได้ทันที ต้องปริ้นอันใหม่ติดแทน")) return;
+    const j = await api({ action: "save_qr", admin_pin: adminPin, branch_id: branchId, qr_required: $("qrRequired").checked, rotate: !!rotate,
+      wifi: { ssid: $("wifiSsid").value.trim(), pass: $("wifiPass").value, type: $("wifiType").value, hidden: $("wifiHidden").checked } });
+    if (!j || !j.ok){ setMsg("qrStatus", j && j.error === "need_migration_0009" ? "ต้องรันไฟล์ 0009_qr.sql ใน Supabase ก่อน" : errText(j), false); return; }
+    await loadQr();
+    setMsg("qrStatus", rotate ? "เปลี่ยน QR แล้ว กด \"ปริ้น QR\" แล้วติดอันใหม่แทน" : "บันทึกแล้ว", true);
+  }
+
+  function qrPunchUrl(){
+    const u = new URL("index.html", location.href);
+    u.search = "";
+    u.searchParams.set("b", qrData.access_key || "");
+    u.searchParams.set("q", qrData.qr_secret || "");
+    return u.toString();
+  }
+  function wifiText(w){
+    const esc = v => String(v).replace(/([\\;,:"])/g, "\\$1");
+    if (!w.ssid) return "";
+    return "WIFI:T:" + (w.type === "nopass" ? "nopass" : w.type) + ";S:" + esc(w.ssid) + ";" +
+      (w.type === "nopass" ? "" : "P:" + esc(w.pass) + ";") + (w.hidden ? "H:true;" : "") + ";";
+  }
+  function qrSvg(text){
+    qrcode.stringToBytes = qrcode.stringToBytesFuncs["UTF-8"];
+    const q = qrcode(0, "M"); q.addData(text); q.make();
+    return q.createSvgTag(8, 2);
+  }
+  function escHtml(v){ return String(v).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])); }
+
+  async function printQr(){
+    if (!qrData){ setMsg("qrStatus", "ยังโหลดข้อมูลไม่เสร็จ", false); return; }
+    const win = window.open("", "_blank"); // เปิดก่อน ไม่งั้นเบราว์เซอร์บล็อกหน้าต่าง
+    try{ await loadScript("https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.js"); }
+    catch(e){ if (win) win.close(); setMsg("qrStatus", "โหลดตัวสร้าง QR ไม่สำเร็จ ลองใหม่", false); return; }
+    if (!win){ setMsg("qrStatus", "เบราว์เซอร์บล็อกหน้าต่างใหม่ ให้อนุญาตป๊อปอัปแล้วลองใหม่", false); return; }
+    const w = { ssid: $("wifiSsid").value.trim(), pass: $("wifiPass").value, type: $("wifiType").value, hidden: $("wifiHidden").checked };
+    const wifi = wifiText(w);
+    const box = (svg, n, th, en, sub) => '<div class="box"><div class="n">' + n + '</div>' + svg +
+      '<div class="th">' + th + '</div><div class="en">' + en + '</div>' + (sub ? '<div class="sub">' + sub + '</div>' : "") + '</div>';
+    const html = '<!doctype html><html lang="th"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">' +
+      '<title>QR ตอกบัตร - ' + escHtml(qrData.name) + '</title><style>' +
+      '@page{ size:A4; margin:12mm; } body{ font-family:system-ui,-apple-system,"Noto Sans Thai",sans-serif; margin:0; color:#0f172a; background:#fff; text-align:center; }' +
+      'h1{ font-size:26px; margin:6px 0 2px; } .shop{ font-size:16px; color:#475569; margin-bottom:14px; }' +
+      '.wrap{ display:flex; gap:18px; justify-content:center; flex-wrap:wrap; }' +
+      '.box{ border:3px solid #0f172a; border-radius:18px; padding:14px 14px 16px; width:82mm; position:relative; }' +
+      '.box svg{ width:70mm; height:70mm; display:block; margin:6px auto; }' +
+      '.n{ position:absolute; top:-16px; left:-16px; width:38px; height:38px; border-radius:50%; background:#0f172a; color:#fff; font-size:22px; font-weight:900; line-height:38px; }' +
+      '.th{ font-size:22px; font-weight:900; } .en{ font-size:15px; color:#475569; font-weight:700; } .sub{ font-size:13px; color:#64748b; margin-top:6px; word-break:break-all; }' +
+      '.note{ font-size:13px; color:#64748b; margin-top:16px; } .btn{ margin:14px; padding:10px 18px; font-size:16px; font-weight:900; border-radius:10px; border:none; background:#0f172a; color:#fff; }' +
+      '@media print{ .btn{ display:none; } }</style></head><body>' +
+      '<button class="btn" onclick="print()">🖨️ ปริ้น / บันทึกเป็น PDF</button>' +
+      '<h1>⏱️ ตอกบัตรเข้า-ออกงาน</h1><div class="shop">' + escHtml(qrData.name) + '</div><div class="wrap">' +
+      (wifi ? box(qrSvg(wifi), "1", "📶 ต่อ WiFi ร้าน", "Connect to shop WiFi", "WiFi: " + escHtml(w.ssid)) : "") +
+      box(qrSvg(qrPunchUrl()), wifi ? "2" : "1", "📷 สแกนเพื่อตอกบัตร", "Scan to clock in / out", "ต้องสแกนใหม่ทุกครั้ง · Scan every time") +
+      '</div><div class="note">ต่อ WiFi ร้านก่อน แล้วสแกน QR ตอกบัตร · Connect to the WiFi first, then scan to clock in/out</div></body></html>';
+    win.document.open(); win.document.write(html); win.document.close();
+    setMsg("qrStatus", "เปิดหน้าปริ้นแล้ว (แท็บใหม่)", true);
   }
 
   // ---------- แจ้งเตือน ----------
@@ -2178,7 +2278,7 @@
     if (name === "pay"){ loadPaySettings(); loadPaySummary(); loadPending(); loadHistory(); }
     if (name === "shifts"){ loadPaySettings().then(() => { renderShiftList(); loadRoster(); }); }
     if (name === "adv"){ loadPaySettings(); loadAdvances(); }
-    if (name === "branches"){ loadAccess(); loadNotify(); }
+    if (name === "branches"){ loadAccess(); loadNotify(); loadQr(); }
   }
 
   $("loginPin").addEventListener("keydown", e => { if (e.key === "Enter") doLogin(); });

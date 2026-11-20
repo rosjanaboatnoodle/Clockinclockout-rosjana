@@ -1,6 +1,6 @@
 // Edge Function "clock" — ระบบตอกบัตร (ใช้ Supabase project เดียวกับปฏิทินได้ หรือใช้เดี่ยวๆ ก็ได้)
 //
-// Database: run supabase/migrations/0001_clock.sql … 0008_push.sql in order.
+// Database: run supabase/migrations/0001_clock.sql … 0009_qr.sql in order.
 // Deploy: Supabase Dashboard -> Edge Functions -> create function named "clock" ->
 // paste this file's contents -> Deploy -> แท็บ Settings -> ปิด "Verify JWT with legacy secret"
 //
@@ -131,14 +131,15 @@ function newAccessKey(): string {
   return [...crypto.getRandomValues(new Uint8Array(8))].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
-type KeyBranch = { id: string; name?: string; require_device?: boolean; require_ip?: boolean; allowed_ips?: string[]; staff_login?: boolean };
+type KeyBranch = { id: string; name?: string; require_device?: boolean; require_ip?: boolean; allowed_ips?: string[]; staff_login?: boolean; qr_required?: boolean; qr_secret?: string | null };
 
 async function branchFromKey(p: Record<string, unknown>): Promise<KeyBranch | null> {
   const key = String(p.key ?? "").trim();
   if (!/^[a-f0-9]{8,64}$/i.test(key)) return null;
   const q = (cols: string) => supabase.from("branches").select(cols).eq("access_key", key.toLowerCase()).maybeSingle();
   // newest columns first; an older database (0006/0007 not run yet) just has fewer locks
-  let { data, error } = await q("id, name, require_device, require_ip, allowed_ips, staff_login");
+  let { data, error } = await q("id, name, require_device, require_ip, allowed_ips, staff_login, qr_required, qr_secret");
+  if (error) ({ data, error } = await q("id, name, require_device, require_ip, allowed_ips, staff_login"));
   if (error) ({ data, error } = await q("id, name, require_device, require_ip, allowed_ips"));
   if (error) ({ data } = await q("id, name"));
   return (data as KeyBranch | null) ?? null;
@@ -228,6 +229,15 @@ function nameMatches(input: string, s: { name: string; label: string }): boolean
   if (!v) return false;
   const words = [s.name, s.label, ...String(s.label ?? "").split(/\s+/)].map((w) => String(w ?? "").trim().toLowerCase()).filter(Boolean);
   return words.includes(v);
+}
+
+// ---------- QR on the wall (optional) ----------
+// Clocking in/out needs the code from the printed QR (the page gets it from the scan).
+// A photo of the QR still carries the code, so this works together with the shop-internet lock.
+// The shop's shared tablet is in the shop already and never needs to scan.
+
+function qrOk(b: KeyBranch, p: Record<string, unknown>): boolean {
+  return !!b.qr_secret && String(p.qr ?? "").toLowerCase() === b.qr_secret;
 }
 
 // ---------- Shop internet lock (optional, per branch) ----------
@@ -516,6 +526,7 @@ async function handleBootstrap(p: Record<string, unknown>) {
   let admin = false;
   let me: number | null = null;  // signed-in person on a personal phone
   let kiosk = false;
+  let qrRequired = false, qrScanned = false;
   if (p.admin_pin) {
     const g = await adminGate(p);
     if (g) return g;
@@ -537,6 +548,7 @@ async function handleBootstrap(p: Record<string, unknown>) {
       });
     }
     if (v && typeof v !== "string") { me = v.staffId; kiosk = v.kiosk; }
+    if (b) { qrRequired = !!b.qr_required && !kiosk; qrScanned = qrOk(b, p); }
   }
   const cols = "id, name, sort, lat, lng, radius_m, require_gps, require_photo" + (admin ? ", access_key, photo_keep_days" : "");
   let bq = supabase.from("branches").select(cols);
@@ -561,7 +573,7 @@ async function handleBootstrap(p: Record<string, unknown>) {
     tz: shopTz(),
     has_admin: await hasAdmin(),
     bad_link: !admin && !!p.key && !only,
-    me, kiosk,
+    me, kiosk, qr_required: qrRequired, qr_ok: qrScanned,
     branches: (branches ?? []).map((b: Record<string, unknown>) => ({
       ...b,
       ...(admin ? {} : { access_key: undefined, photo_keep_days: undefined }), // keys only go to the admin
@@ -853,6 +865,8 @@ async function handlePunch(p: Record<string, unknown>) {
   const staffId = Number(p.staff_id) || 0;
   if (kb.viewer.staffId && kb.viewer.staffId !== staffId) return json({ ok: false, error: "not_you" });
   const type = ["out", "break_start", "break_end"].includes(String(p.type)) ? String(p.type) : "in";
+  // clocking in/out (not breaks) needs the code from the QR scan
+  if (kb.qr_required && !kb.viewer.kiosk && (type === "in" || type === "out") && !qrOk(kb, p)) return json({ ok: false, error: "scan_qr" });
   const pin = String(p.pin ?? "").trim();
   const lang = cleanLang(p.lang);
   if (!/^\d{4,6}$/.test(pin)) return json({ ok: false, error: "pin_invalid" });
@@ -2720,6 +2734,35 @@ async function handleStaffLogout(p: Record<string, unknown>) {
   return json({ ok: true });
 }
 
+// Admin: QR poster settings (the secret goes only to the admin, for printing).
+async function handleQrSettings(p: Record<string, unknown>) {
+  { const g = await adminGate(p); if (g) return g; }
+  const id = String(p.branch_id ?? "");
+  const { data: b, error } = await supabase.from("branches").select("id, name, access_key, qr_required, qr_secret, wifi, require_ip").eq("id", id).maybeSingle();
+  if (error) return json({ ok: false, error: "need_migration_0009" });
+  if (!b) return json({ ok: false, error: "unknown_branch" });
+  let secret = b.qr_secret as string | null;
+  if (!secret) {
+    secret = newAccessKey();
+    await supabase.from("branches").update({ qr_secret: secret }).eq("id", id);
+  }
+  return json({ ok: true, qr_required: !!b.qr_required, qr_secret: secret, access_key: b.access_key, wifi: b.wifi ?? {}, require_ip: !!b.require_ip, name: b.name });
+}
+
+async function handleSaveQr(p: Record<string, unknown>) {
+  { const g = await adminGate(p); if (g) return g; }
+  const id = String(p.branch_id ?? "");
+  const w = (p.wifi && typeof p.wifi === "object") ? p.wifi as Record<string, unknown> : {};
+  const type = ["WPA", "WEP", "nopass"].includes(String(w.type)) ? String(w.type) : "WPA";
+  const wifi = { ssid: String(w.ssid ?? "").slice(0, 64), pass: type === "nopass" ? "" : String(w.pass ?? "").slice(0, 64), type, hidden: !!w.hidden };
+  const row: Record<string, unknown> = { qr_required: !!p.qr_required, wifi };
+  if (p.rotate) row.qr_secret = newAccessKey();
+  const { error } = await supabase.from("branches").update(row).eq("id", id);
+  if (error) return json({ ok: false, error: "need_migration_0009" });
+  await logAdmin("save_qr", { id, qr_required: row.qr_required, wifi_ssid: wifi.ssid, rotated: !!p.rotate });
+  return json({ ok: true });
+}
+
 // Staff: put a name on a phone that waits for approval, so the admin knows whose it is.
 async function handleDeviceHello(p: Record<string, unknown>) {
   const b = await branchFromKey(p);
@@ -2786,6 +2829,8 @@ const ACTIONS: Record<string, (p: Record<string, unknown>) => Promise<Response>>
   device_hello: handleDeviceHello,
   staff_login: handleStaffLogin,
   staff_logout: handleStaffLogout,
+  qr_settings: handleQrSettings,
+  save_qr: handleSaveQr,
   push_key: handlePushKey,
   push_subscribe: handlePushSubscribe,
   push_subscribe_admin: handlePushSubscribeAdmin,
