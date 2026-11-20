@@ -107,6 +107,7 @@
   .moreBtn{ display:block; width:100%; margin-top:6px; border:none; background:transparent; color:#4338ca; font-weight:900; font-size:13px; padding:6px; cursor:pointer; }
   .pushRow{ margin:10px 0 4px; }
   .overlay.sheet{ z-index:120; }
+  .ownLang{ font-size:12.5px; font-weight:800; color:#6366f1; margin-top:6px; }
   #sheetBody .leaveBox{ border-top:none; margin-top:0; padding-top:0; }
   .actRow{ display:flex; gap:8px; margin:12px 0 6px; }
   .actBtn{ flex:1; border:none; border-radius:14px; padding:14px 6px; font-weight:900; font-size:14.5px; cursor:pointer; background:#eef2ff; color:#3730a3; }
@@ -303,7 +304,7 @@
   </div>
 </div>
 
-<script src="ui-text.js?v=20261121-4"></script><!-- แก้ ui-text.js แล้วเปลี่ยนเลข v ด้วย เครื่องเด็กจะได้โหลดไฟล์ใหม่ -->
+<script src="ui-text.js?v=20261121-5"></script><!-- แก้ ui-text.js แล้วเปลี่ยนเลข v ด้วย เครื่องเด็กจะได้โหลดไฟล์ใหม่ -->
 <script>
   // ข้อมูลอยู่ใน Supabase (Edge Function "clock") ดูวิธีตั้งค่าใน README.md
   // ใส่ค่าจาก Supabase Dashboard -> Project Settings -> API:
@@ -1046,6 +1047,7 @@
     const note = el("input"); note.placeholder = t("kudosPh"); note.maxLength = 200;
     const send = el("button", "sendBtn", t("kudosSend"));
     row.append(note, send); wrap.appendChild(row);
+    wrap.appendChild(el("div", "ownLang", t("typeOwnLang")));
     const msg = el("div", "result"); wrap.appendChild(msg);
     box.appendChild(wrap);
     const j = await api({ action: "kudos", key: KEY, staff_id: current.id, pin, list: true });
@@ -1085,6 +1087,7 @@
     const send = el("button", "sendBtn", t("leaveSend"));
     row.append(note, send);
     wrap.appendChild(row);
+    wrap.appendChild(el("div", "ownLang", t("typeOwnLang")));
     const msg = el("div", "result");
     wrap.appendChild(msg);
     send.onclick = async () => {
@@ -1182,6 +1185,7 @@
     const r2 = el("div", "reqRow");
     const send = el("button", "sendBtn", t("sendRequest"));
     r2.append(item, send); box.appendChild(r2);
+    box.appendChild(el("div", "ownLang", t("typeOwnLang")));
     const msg = el("div", "result"); box.appendChild(msg);
     send.onclick = async () => {
       const n = Number(amount.value);
