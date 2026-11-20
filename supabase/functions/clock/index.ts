@@ -2882,6 +2882,8 @@ const EVAL_DEFAULTS = {
   note_cut: [0, 2],             // net 👎 ≤ 0 → 3 · ≤ 2 → 2 · more → 1
   level_min: [11, 9, 7, 0],     // score out of 12 for ดีมาก / ดี / พอใช้ / ต้องปรับปรุง
   level_pct: [100, 70, 40, 0],
+  bonus_mode: "pct",            // "pct" = % of bonus_max · "amount" = baht per level (level_amount)
+  level_amount: [1000, 700, 400, 0],
   cap_if_one: true,             // any criterion at 1 → at best พอใช้
   bonus_max: 1000,
   show_on_bill: true,
@@ -2911,6 +2913,8 @@ function evalCfg(raw: unknown): EvalCfg {
     note_cut: pair(r.note_cut, [0, 2], 31),
     level_min: four(r.level_min, [11, 9, 7, 0], 12),
     level_pct: four(r.level_pct, [100, 70, 40, 0], 100),
+    bonus_mode: r.bonus_mode === "amount" ? "amount" : "pct",
+    level_amount: four(r.level_amount, [1000, 700, 400, 0], 1000000),
     cap_if_one: r.cap_if_one === undefined ? true : !!r.cap_if_one,
     bonus_max: num(r.bonus_max, 1000, 0, 1000000),
     show_on_bill: r.show_on_bill === undefined ? true : !!r.show_on_bill,
@@ -3081,7 +3085,10 @@ async function handleEvalSave(p: Record<string, unknown>) {
   const lv = evalLevel(cfg, scores);
   const bonusMax = Number.isFinite(Number(p.bonus_max)) ? Math.max(0, Math.round(Number(p.bonus_max))) : cfg.bonus_max;
   const bonusOn = p.bonus_on !== false;
-  const bonus = bonusOn ? Math.round(bonusMax * lv.pct / 100) : 0;
+  // bonus: the admin's own amount, else baht per level, else % of the full bonus
+  const manual = p.bonus_amount !== undefined && p.bonus_amount !== null && p.bonus_amount !== "" && Number.isFinite(Number(p.bonus_amount));
+  const auto = cfg.bonus_mode === "amount" ? cfg.level_amount[lv.level] : Math.round(bonusMax * lv.pct / 100);
+  const bonus = !bonusOn ? 0 : manual ? Math.max(0, Math.round(Number(p.bonus_amount))) : auto;
   // reasons: picked notes (good first), translated into every language once
   const noteIds = (Array.isArray(p.reasons) ? p.reasons : []).map(Number).filter(Boolean).slice(0, 5);
   let reasons: Array<Record<string, unknown>> = [];

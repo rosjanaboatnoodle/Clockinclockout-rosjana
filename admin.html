@@ -389,9 +389,12 @@
       <div class="row"><span class="hint" style="margin:0;">ตรงเวลา: ได้ 3 ถ้าสาย+ขาดไม่เกิน</span><input class="field sm" id="evLate0" type="number" min="0"><span class="hint" style="margin:0;">ครั้ง · ได้ 2 ถ้าไม่เกิน</span><input class="field sm" id="evLate1" type="number" min="0"><span class="hint" style="margin:0;">ครั้ง · มากกว่านั้น 1</span></div>
       <div class="row"><span class="hint" style="margin:0;">เกณฑ์อื่น (👎 − 👍): ได้ 3 ถ้าไม่เกิน</span><input class="field sm" id="evNote0" type="number" min="0"><span class="hint" style="margin:0;">· ได้ 2 ถ้าไม่เกิน</span><input class="field sm" id="evNote1" type="number" min="0"><span class="hint" style="margin:0;">· มากกว่านั้น 1</span></div>
       <div class="cardTitle" style="margin-top:10px; font-size:14px;">ระดับ (คะแนนเทียบเต็ม 12) และโบนัส</div>
+      <div class="row"><span class="hint" style="margin:0;">คิดโบนัสแบบ</span>
+        <select class="field" id="evMode" onchange="evModeChange()"><option value="pct">% ของโบนัสเต็ม</option><option value="amount">ใส่ยอดเงินแต่ละระดับ</option></select></div>
       <div id="evLevels"></div>
       <label class="check"><input type="checkbox" id="evCap"> มีข้อไหนได้ 1 → สูงสุดแค่ "พอใช้"</label>
-      <div class="row"><span class="hint" style="margin:0;">โบนัสเต็ม (บาท)</span><input class="field sm" id="evBonus" type="number" min="0"></div>
+      <div class="row" id="evBonusRow"><span class="hint" style="margin:0;">โบนัสเต็ม (บาท)</span><input class="field sm" id="evBonus" type="number" min="0"></div>
+      <div class="hint">ตอนสรุปรายคน แก้ยอดโบนัสเองได้เสมอ (ทับยอดที่ระบบคิด)</div>
       <label class="check"><input type="checkbox" id="evShow"> แสดงผลประเมินในบิล (ค่าเริ่มต้น เปลี่ยนรายคนได้) · ไม่แสดง = บิลมีแค่บรรทัดโบนัส</label>
       <label class="check"><input type="checkbox" id="evWeeklyOn"> แจ้งเตือนแอดมินให้เช็คสัปดาห์ละครั้ง</label>
       <div class="row"><span class="hint" style="margin:0;">วัน</span><select class="field sm" id="evWDay"><option value="0">อาทิตย์</option><option value="1">จันทร์</option><option value="2">อังคาร</option><option value="3">พุธ</option><option value="4">พฤหัส</option><option value="5">ศุกร์</option><option value="6">เสาร์</option></select><span class="hint" style="margin:0;">ตั้งแต่กี่โมง</span><input class="field sm" id="evWHour" type="number" min="0" max="23"></div>
@@ -950,6 +953,10 @@
     const totalBox = el("div", "evTotal");
     const bonusOn = el("input"); bonusOn.type = "checkbox"; bonusOn.checked = saved ? saved.bonus_on : true; bonusOn.disabled = p.locked;
     const bonusMax = el("input", "field sm"); bonusMax.type = "number"; bonusMax.min = "0"; bonusMax.value = saved ? saved.bonus_max : evCfg.bonus_max; bonusMax.disabled = p.locked;
+    const amtMode = evCfg.bonus_mode === "amount";
+    // ยอดโบนัสที่แอดมินใส่เอง (ว่าง = ใช้ยอดที่ระบบคิด)
+    const own = el("input", "field sm"); own.type = "number"; own.min = "0"; own.placeholder = "ตามระบบ"; own.disabled = p.locked;
+    let autoBonus = 0;
     const show = el("input"); show.type = "checkbox"; show.checked = saved ? saved.show : evCfg.show_on_bill; show.disabled = p.locked;
     const recalc = () => {
       const on = evOnCrits();
@@ -959,8 +966,11 @@
       let lv = evCfg.level_min.findIndex(m => scaled >= m); if (lv < 0) lv = 3;
       if (evCfg.cap_if_one && on.some(c => scores[c.id] === 1) && lv < 2) lv = 2;
       const pct = evCfg.level_pct[lv];
-      const bonus = bonusOn.checked ? Math.round(Number(bonusMax.value || 0) * pct / 100) : 0;
-      totalBox.textContent = total + "/" + max + " · " + evLevelsTh[lv] + " · โบนัส " + pct + "% = " + bonus.toLocaleString("th-TH") + " บาท" + (lv === 3 ? " · 💬 นัดคุยตัวต่อตัว" : "");
+      autoBonus = amtMode ? (evCfg.level_amount || [0, 0, 0, 0])[lv] : Math.round(Number(bonusMax.value || 0) * pct / 100);
+      const manual = own.value !== "";
+      const bonus = !bonusOn.checked ? 0 : manual ? Math.round(Number(own.value)) : autoBonus;
+      const how = manual ? "ใส่เอง" : amtMode ? "ตามระดับ" : pct + "%";
+      totalBox.textContent = total + "/" + max + " · " + evLevelsTh[lv] + " · โบนัส (" + how + ") = " + bonus.toLocaleString("th-TH") + " บาท" + (lv === 3 ? " · 💬 นัดคุยตัวต่อตัว" : "");
     };
     evOnCrits().forEach(c => {
       const sg = p.suggest[c.id] || { score: 3, down: 0, up: 0 };
@@ -996,16 +1006,20 @@
     const opts = el("div", "row");
     const l1 = el("label", "check"); l1.append(bonusOn, document.createTextNode(" ให้โบนัส"));
     const l2 = el("label", "check"); l2.append(show, document.createTextNode(" แสดงผลประเมินในบิล"));
-    opts.append(l1, el("span", "hint", "โบนัสเต็ม"), bonusMax, l2);
+    opts.append(l1);
+    if (!amtMode) opts.append(el("span", "hint", "โบนัสเต็ม"), bonusMax);
+    opts.append(el("span", "hint", "ยอดเอง"), own, l2);
     card.appendChild(opts);
-    bonusOn.onchange = recalc; bonusMax.oninput = recalc;
+    bonusOn.onchange = recalc; bonusMax.oninput = recalc; own.oninput = recalc;
+    // บันทึกไว้แล้วด้วยยอดที่ไม่ตรงกับที่ระบบคิด = เคยใส่เอง
+    if (saved && saved.bonus_on){ setTimeout(() => { if (Number(saved.bonus) !== autoBonus){ own.value = saved.bonus; recalc(); } }, 0); }
     const act = el("div", "row"); const st = el("div", "status");
     if (!p.locked){
       const save = el("button", "btn green", saved ? "บันทึกใหม่" : "บันทึกผลประเมิน");
       save.onclick = async () => {
         save.disabled = true; setMsg2(st, "กำลังบันทึก (แปลเหตุผลเป็นภาษาอื่นด้วย)…");
         const reasons = [...card.querySelectorAll(".evReason")].filter(x => x.checked).map(x => Number(x.value)).slice(0, 5);
-        const j = await api({ action: "eval_save", admin_pin: adminPin, staff_id: p.staff_id, date: p.period.start, scores, bonus_on: bonusOn.checked, bonus_max: Number(bonusMax.value || 0), show: show.checked, reasons });
+        const j = await api({ action: "eval_save", admin_pin: adminPin, staff_id: p.staff_id, date: p.period.start, scores, bonus_on: bonusOn.checked, bonus_max: Number(bonusMax.value || 0), bonus_amount: own.value === "" ? null : Number(own.value), show: show.checked, reasons });
         save.disabled = false;
         if (!j || !j.ok){ setMsg2(st, errText(j), false); return; }
         setMsg2(st, "บันทึกแล้ว · โบนัส " + Number(j.result.bonus).toLocaleString("th-TH") + " บาท เข้ายอดเงินแล้ว (ดูในแท็บเงิน / บิล)", true);
@@ -1033,6 +1047,7 @@
     $("evLate0").value = c.late_cut[0]; $("evLate1").value = c.late_cut[1];
     $("evNote0").value = c.note_cut[0]; $("evNote1").value = c.note_cut[1];
     $("evCap").checked = c.cap_if_one; $("evBonus").value = c.bonus_max; $("evShow").checked = c.show_on_bill;
+    $("evMode").value = c.bonus_mode || "pct";
     $("evWeeklyOn").checked = c.weekly; $("evWDay").value = String(c.weekly_day); $("evWHour").value = c.weekly_hour;
     $("evKudosOn").checked = c.kudos;
     renderCritEdit();
@@ -1043,9 +1058,19 @@
       const mn = el("input", "field sm"); mn.type = "number"; mn.min = "0"; mn.max = "12"; mn.value = c.level_min[i]; mn.id = "evLvMin" + i;
       if (i === 3){ mn.disabled = true; mn.value = 0; }
       const pc = el("input", "field sm"); pc.type = "number"; pc.min = "0"; pc.max = "100"; pc.value = c.level_pct[i]; pc.id = "evLvPct" + i;
-      r.append(lab, mn, el("span", "hint", "คะแนน · โบนัส"), pc, el("span", "hint", "%"));
+      const am = el("input", "field sm"); am.type = "number"; am.min = "0"; am.value = (c.level_amount || [1000, 700, 400, 0])[i]; am.id = "evLvAmt" + i;
+      const pcWrap = el("span", "evPct"); pcWrap.append(pc, el("span", "hint", "%"));
+      const amWrap = el("span", "evAmt"); amWrap.append(am, el("span", "hint", "บาท"));
+      r.append(lab, mn, el("span", "hint", "คะแนน · โบนัส"), pcWrap, amWrap);
       lv.appendChild(r);
     });
+    evModeChange();
+  }
+  function evModeChange(){
+    const amt = $("evMode").value === "amount";
+    document.querySelectorAll("#evLevels .evPct").forEach(x => x.style.display = amt ? "none" : "");
+    document.querySelectorAll("#evLevels .evAmt").forEach(x => x.style.display = amt ? "" : "none");
+    $("evBonusRow").style.display = amt ? "none" : "";
   }
   function renderCritEdit(){
     const box = $("evCritEdit"); box.innerHTML = "";
@@ -1072,6 +1097,7 @@
       late_cut: [n("evLate0"), n("evLate1")], note_cut: [n("evNote0"), n("evNote1")],
       level_min: [0, 1, 2, 3].map(i => i === 3 ? 0 : n("evLvMin" + i)), level_pct: [0, 1, 2, 3].map(i => n("evLvPct" + i)),
       cap_if_one: $("evCap").checked, bonus_max: n("evBonus"), show_on_bill: $("evShow").checked,
+      bonus_mode: $("evMode").value, level_amount: [0, 1, 2, 3].map(i => n("evLvAmt" + i)),
       weekly: $("evWeeklyOn").checked, weekly_day: n("evWDay"), weekly_hour: n("evWHour"), kudos: $("evKudosOn").checked,
       criteria: evCfg.criteria.filter(x => (x.th || "").trim()),
     });
@@ -2402,7 +2428,8 @@
     if (t.ot_hours) line(T("billOt"), rates.ot_rate ? T("billOtRate", { h: num(t.ot_hours), r: num(rates.ot_rate) }) : num(t.ot_hours) + " " + T("billHrs"), money(t.ot_pay));
     if (t.late_deduct) line(T("billLate"), T("billLateInfo", { n: t.late_times, m: t.late_min }), "−" + money(t.late_deduct));
     const ev = b.eval;
-    if (t.bonus) line(T("billBonus"), ev ? T("billBonusInfo", { p: ev.pct, max: money(ev.bonus_max) }) : "", "+" + money(t.bonus));
+    const pctBonus = ev && ev.bonus_max && Number(ev.bonus) === Math.round(ev.bonus_max * ev.pct / 100);
+    if (t.bonus) line(T("billBonus"), pctBonus ? T("billBonusInfo", { p: ev.pct, max: money(ev.bonus_max) }) : "", "+" + money(t.bonus));
     line(T("billGross"), "", money(t.gross), "sum");
     bill.appendChild(tbl);
 
