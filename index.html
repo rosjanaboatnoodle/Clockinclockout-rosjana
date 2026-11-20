@@ -228,6 +228,11 @@
       <button class="moreBtn" id="weekMore" onclick="toggleWeek()"></button>
     </div>
 
+    <!-- มือถือที่เข้าสู่ระบบแล้ว: ปุ่มขอลา/ขอเบิก แจ้งเตือน และรายการเบิก อยู่กล่องแยกใต้ตารางงาน -->
+    <div class="card" id="meExtra" style="display:none;">
+      <div id="meExtraBody"></div>
+    </div>
+
     <div class="card" id="staffCard">
       <div class="cardTitle" data-t="staffTitle">พนักงาน</div>
       <div class="cardHint" data-t="staffHint">กดที่ชื่อของคุณ แล้วใส่ PIN</div>
@@ -270,7 +275,7 @@
     <button class="myBtn" id="myBtn" onclick="openMy()" data-t="myButton">💵 ยอดของฉัน / เบิกเงิน / 📝 ขอลา</button>
     <div class="myBox" id="myBox" style="display:none;"></div>
     <button class="btn btnClose" id="closeBtn" onclick="closePunch()" data-t="close">ปิด</button>
-    <div class="fine" data-t="fineprint">* ระบบบันทึกเวลาตามเวลาของร้าน พนักงานแก้เวลาเองไม่ได้</div>
+    <div class="fine" id="fineprint" data-t="fineprint">* ระบบบันทึกเวลาตามเวลาของร้าน พนักงานแก้เวลาเองไม่ได้</div>
     <div class="fine" id="privacyNote" data-t="privacy" style="display:none;">ระบบเก็บตำแหน่งและรูปถ่ายตอนตอกบัตร เพื่อยืนยันการเข้างานเท่านั้น</div>
   </div>
 </div>
@@ -691,6 +696,7 @@
     document.getElementById("closeBtn").style.display = me ? "none" : "";
     document.getElementById("myBtn").style.display = me ? "none" : "";
     panel.style.display = me ? "" : "none";
+    document.getElementById("meExtra").style.display = me ? "" : "none";
     if (me){
       const fresh = !isInline() || !current || current.id !== me.id;
       if (!isInline()) panel.appendChild(punchModal);
@@ -1131,21 +1137,24 @@
     if (j.absent_days) stat(String(j.absent_days), t("absentDays"));
     box.appendChild(stats);
     MY = { j, pin };
+    // มือถือที่เข้าสู่ระบบแล้ว: ส่วนนี้ไปอยู่กล่องแยกใต้ตารางงาน
+    const tail = isInline() ? document.getElementById("meExtraBody") : box;
+    if (tail !== box) tail.innerHTML = "";
     // ปุ่มเรียงกัน กดแล้วค่อยเปิดหน้าต่างของเรื่องนั้น
     const acts = el("div", "actRow");
     const act = (label, kind) => { const b = el("button", "actBtn", label); b.onclick = () => openSheet(kind); acts.appendChild(b); };
     act(t("leaveTitle"), "leave");
     if (j.staff_advance) act(t("advBtn"), "adv");
     if (j.kudos_on) act(t("kudosTitle"), "kudos");
-    box.appendChild(acts);
+    tail.appendChild(acts);
     // วันลาที่จะถึง (สั้นๆ)
     const soon = (j.leaves || []).filter(l => l.date >= shopToday() && l.status !== "rejected");
     if (soon.length){
       const st = soon.some(l => l.status === "pending") ? t("statusPending") : t("statusApproved");
-      box.appendChild(el("div", "fine", t("onLeave") + ": " + soon.slice(0, 5).map(l => fmtDay(l.date)).join(", ") + (soon.length > 5 ? " …" : "") + " · " + st));
+      tail.appendChild(el("div", "fine", t("onLeave") + ": " + soon.slice(0, 5).map(l => fmtDay(l.date)).join(", ") + (soon.length > 5 ? " …" : "") + " · " + st));
     }
-    if (!IS_KIOSK) box.appendChild(pushRow(pin));
-    if (!j.advances.length) box.appendChild(el("div", "empty", t("noAdvances")));
+    if (!IS_KIOSK) tail.appendChild(pushRow(pin));
+    if (!j.advances.length) tail.appendChild(el("div", "empty", t("noAdvances")));
     j.advances.slice().reverse().forEach(a => {
       const row = el("div", "advRow");
       row.appendChild(el("span", "", fmtDay(a.date) + (a.item ? " · " + a.item : "")));
@@ -1154,7 +1163,7 @@
       const key = { pending: "statusPending", approved: "statusApproved", rejected: "statusRejected" }[a.status];
       right.appendChild(el("span", "st " + a.status, t(key)));
       row.appendChild(right);
-      box.appendChild(row);
+      tail.appendChild(row);
     });
   }
 
