@@ -875,11 +875,14 @@
     } catch(e){ setMsg("pushStatus", "เปิดไม่สำเร็จ: " + e.message, false); }
     await loadNotify();
   }
+  // ทดสอบส่งเฉพาะเครื่องที่กดเท่านั้น
   async function testPush(){
     const sub = await adminSub();
-    const j = await api({ action: "push_test", admin_pin: adminPin, endpoint: sub ? sub.endpoint : "" });
+    if (!sub || !adminPushOn){ setMsg("pushStatus", "เครื่องนี้ยังไม่ได้เปิดแจ้งเตือน กด \"🔔 เปิดแจ้งเตือนบนเครื่องนี้\" ก่อน แล้วค่อยกดทดสอบ", false); return; }
+    const j = await api({ action: "push_test", admin_pin: adminPin, endpoint: sub.endpoint });
     if (!j || !j.ok){ setMsg("pushStatus", errText(j), false); return; }
-    setMsg("pushStatus", j.total ? (j.sent ? "ส่งแล้ว ดูแจ้งเตือนบนเครื่อง" : "ส่งไม่สำเร็จ ลองปิดแล้วเปิดใหม่") : "เครื่องนี้ยังไม่ได้เปิดแจ้งเตือน", !!j.sent);
+    if (!j.total){ setMsg("pushStatus", "เครื่องนี้หลุดจากรายการแจ้งเตือนแล้ว กด \"🔔 เปิดแจ้งเตือนบนเครื่องนี้\" ใหม่", false); await refreshAdminPushBtn(); return; }
+    setMsg("pushStatus", j.sent ? "ส่งไปเครื่องนี้แล้ว ถ้าไม่เด้ง ดูโหมดโฟกัส/ห้ามรบกวน" : "ส่งไม่สำเร็จ กดปิดแล้วเปิดแจ้งเตือนใหม่", !!j.sent);
   }
 
   // ---------- ล็อกเพิ่ม: เครื่อง + เน็ตร้าน ----------

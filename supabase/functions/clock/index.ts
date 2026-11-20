@@ -2621,7 +2621,7 @@ async function handlePushDelete(p: Record<string, unknown>) {
 // Admin: try it — sends to this device (endpoint) or every admin device.
 async function handlePushTest(p: Record<string, unknown>) {
   { const g = await adminGate(p); if (g) return g; }
-  const subs = (await loadSubs()).filter((x) => p.endpoint ? x.endpoint === p.endpoint : x.role === "admin");
+  const subs = (await loadSubs()).filter((x) => x.endpoint === String(p.endpoint ?? "")); // only the device that asked
   let ok = 0;
   for (const s of subs) if (await sendPush(s, { title: "🔔 ทดสอบแจ้งเตือน", body: "ถ้าเห็นข้อความนี้ แจ้งเตือนใช้ได้แล้ว", tag: "test", url: s.role === "admin" ? "./admin.html" : "./index.html" })) ok++;
   return json({ ok: true, sent: ok, total: subs.length });
