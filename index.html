@@ -285,7 +285,7 @@
   </div>
 </div>
 
-<script src="ui-text.js?v=20261121-2"></script><!-- แก้ ui-text.js แล้วเปลี่ยนเลข v ด้วย เครื่องเด็กจะได้โหลดไฟล์ใหม่ -->
+<script src="ui-text.js?v=20261121-3"></script><!-- แก้ ui-text.js แล้วเปลี่ยนเลข v ด้วย เครื่องเด็กจะได้โหลดไฟล์ใหม่ -->
 <script>
   // ข้อมูลอยู่ใน Supabase (Edge Function "clock") ดูวิธีตั้งค่าใน README.md
   // ใส่ค่าจาก Supabase Dashboard -> Project Settings -> API:
@@ -1015,6 +1015,33 @@
     renderDuties(j.my_duties);
   }
 
+  // ---------- ชมเพื่อน (ชมได้อย่างเดียว) ----------
+  async function renderKudos(box, pin){
+    const wrap = el("div", "leaveBox");
+    wrap.appendChild(el("div", "cardTitle", t("kudosTitle")));
+    wrap.appendChild(el("div", "fine", t("kudosHint")));
+    const sel = el("select"); sel.style.cssText = "width:100%; padding:10px; border-radius:10px; border:2px solid #e5e7eb; font-size:15px; margin-top:6px;";
+    const o0 = el("option", "", t("kudosPick")); o0.value = ""; sel.appendChild(o0);
+    wrap.appendChild(sel);
+    const row = el("div", "reqRow");
+    const note = el("input"); note.placeholder = t("kudosPh"); note.maxLength = 200;
+    const send = el("button", "sendBtn", t("kudosSend"));
+    row.append(note, send); wrap.appendChild(row);
+    const msg = el("div", "result"); wrap.appendChild(msg);
+    box.appendChild(wrap);
+    const j = await api({ action: "kudos", key: KEY, staff_id: current.id, pin, list: true });
+    ((j && j.people) || []).forEach(p => { const o = el("option", "", p.label); o.value = p.id; sel.appendChild(o); });
+    send.onclick = async () => {
+      if (!sel.value || !note.value.trim()){ msg.textContent = t("kudosNeed"); msg.className = "result err"; return; }
+      send.disabled = true;
+      const r = await api({ action: "kudos", key: KEY, staff_id: current.id, pin, to_staff_id: Number(sel.value), note: note.value.trim() });
+      send.disabled = false;
+      if (!r || !r.ok){ msg.textContent = errorText(r); msg.className = "result err"; return; }
+      note.value = ""; sel.value = "";
+      msg.textContent = t("kudosSent"); msg.className = "result ok";
+    };
+  }
+
   // ---------- ขอลา ----------
   function renderLeave(box, j, pin){
     const wrap = el("div", "leaveBox");
@@ -1105,6 +1132,7 @@
       box.appendChild(row);
     });
     renderLeave(box, j, pin);
+    if (j.kudos_on) renderKudos(box, pin);
     if (!j.staff_advance){ box.appendChild(el("div", "fine", t("advanceOff"))); return; }
 
     box.appendChild(el("div", "cardTitle", t("requestTitle"))).style.marginTop = "10px";

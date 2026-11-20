@@ -1,6 +1,6 @@
 // Edge Function "clock" — ระบบตอกบัตร (ใช้ Supabase project เดียวกับปฏิทินได้ หรือใช้เดี่ยวๆ ก็ได้)
 //
-// Database: run supabase/migrations/0001_clock.sql … 0010_leave.sql in order.
+// Database: run supabase/migrations/0001_clock.sql … 0011_eval.sql in order.
 // Deploy: Supabase Dashboard -> Edge Functions -> create function named "clock" ->
 // paste this file's contents -> Deploy -> แท็บ Settings -> ปิด "Verify JWT with legacy secret"
 //
@@ -450,8 +450,12 @@ async function handleTranslatePage(p: Record<string, unknown>) {
     if (p.include_topics) {
       for (const r of await getTranslations(undefined, "topic.")) if (r.th.trim()) texts[r.key] = r.th;
     }
+    // include_eval: evaluation criteria and level names (Thai taken from what's saved)
+    if (p.include_eval) {
+      for (const r of await getTranslations(undefined, "eval.")) if (r.th.trim()) texts[r.key] = r.th;
+    }
     const keys = Object.keys(texts);
-    if (keys.length > 300) return json({ ok: false, error: "too_many_texts" });
+    if (keys.length > 500) return json({ ok: false, error: "too_many_texts" });
     // One small batch per request so a request never runs into the platform's time limit.
     // The page calls again with `skip` = keys already done in this run, until remaining is 0.
     const skip = new Set(Array.isArray(p.skip) ? (p.skip as unknown[]).map(String) : []);
@@ -573,7 +577,7 @@ async function handleBootstrap(p: Record<string, unknown>) {
   if (error) return json({ ok: false, error: error.message });
   let dict: Record<string, string> = {};
   try {
-    dict = dictFor([...await getTranslations(undefined, "ui.clock."), ...await getTranslations(undefined, "topic.")], lang);
+    dict = dictFor([...await getTranslations(undefined, "ui.clock."), ...await getTranslations(undefined, "topic."), ...await getTranslations(undefined, "eval.")], lang);
   } catch (e) {
     console.error("bootstrap translations failed", e);
   }
@@ -1658,6 +1662,8 @@ async function computeSummary(b: BranchFull, s: StaffFull, per: { start: string;
     }
   }
   const leaveDates = [...sc.leaves].filter((k) => k.startsWith(`${s.id}|`)).map((k) => k.split("|")[1]).sort();
+  const ev = await loadEvaluation(s.id, per.start);
+  const bonus = ev ? Number(ev.bonus) || 0 : 0;
   return {
     staff_id: s.id, name: s.name, label: s.label || s.name, pay_type: rules.pay_type,
     rates: { daily_rate: rules.daily_rate, hourly_rate: rules.hourly_rate, ot_rate: days.find((x) => x.ot_rate)?.ot_rate ?? null },
@@ -1674,11 +1680,12 @@ async function computeSummary(b: BranchFull, s: StaffFull, per: { start: string;
       early_min: days.reduce((m, x) => m + x.early_min, 0),
       late_deduct: lateDeduct,
       absent_days: absentDates.length, leave_days: leaveDates.length,
-      base, ot_pay: otPay, gross: round2(base + otPay - lateDeduct),
-      advances: advTotal, pending: sum(pending, "amount"), net: round2(base + otPay - lateDeduct - advTotal),
+      base, ot_pay: otPay, bonus, gross: round2(base + otPay + bonus - lateDeduct),
+      advances: advTotal, pending: sum(pending, "amount"), net: round2(base + otPay + bonus - lateDeduct - advTotal),
     },
     days,
     absent_dates: absentDates, leave_dates: leaveDates,
+    eval: ev ? { ...ev, criteria: (await branchEval(b.id))?.criteria ?? [] } : null,
     advances: (adv ?? []).filter((a) => a.status !== "rejected"),
   };
 }
@@ -2244,6 +2251,7 @@ async function handleMySummary(p: Record<string, unknown>) {
     ot_on: effectivePay(who.b.pay_defaults, who.s.pay).ot_mode !== "none", // "ไม่มีโอที" = ไม่ต้องโชว์ช่องโอที
     absent_days: sum.totals.absent_days,
     leaves: await myLeaves(who.s.id, sum.period.start),
+    kudos_on: !!(await branchEval(who.b.id).then((c) => c?.enabled && c.kudos)),
     advances: sum.advances.map((a) => ({ id: a.id, date: a.date, amount: Number(a.amount), item: a.item, status: a.status })),
     advances_total: sum.totals.advances,
     pending_total: sum.totals.pending,
@@ -2501,6 +2509,12 @@ async function handleCronTick(p: Record<string, unknown>) {
     const cfg = notifyCfg(b.notify);
     const staffSubs = new Set(subs.filter((x) => x.role === "staff").map((x) => x.staff_id));
     const hasAdmin = subs.some((x) => x.role === "admin" && (!x.branch_id || x.branch_id === b.id));
+    // admin: weekly 2-minute evaluation check
+    const ev = await branchEval(b.id);
+    const dow = new Date(today + "T00:00:00Z").getUTCDay();
+    if (hasAdmin && ev?.enabled && ev.weekly && dow === ev.weekly_day && hour >= ev.weekly_hour && await onceKey(`weekly:${b.id}:${today}`)) {
+      sent += await pushAdmins(b.id, { title: "📋 ประเมินสัปดาห์นี้ (2 นาที)", body: `${b.name ?? b.id}: กด 👍/👎 ให้ทุกคนในแท็บประเมิน`, tag: "weekly" }, subs);
+    }
     const { data: staff } = await supabase.from("staff").select("id, name, label, pay").eq("branch_id", b.id).eq("active", true);
     const people = (staff ?? []) as Array<{ id: number; name: string; label: string; pay: Record<string, unknown> }>;
     const mine = people.filter((s) => staffSubs.has(s.id));
@@ -2848,6 +2862,271 @@ async function handleDeviceHello(p: Record<string, unknown>) {
 }
 
 // ============================================================
+// Monthly evaluation (ประเมินประจำเดือน) — optional, per branch
+// Notes during the month (👍/👎 per criterion) → suggested 1–3 per criterion at the end →
+// level → bonus %, shown on the pay slip. Punctuality comes from the time clock.
+// ============================================================
+
+type EvalCrit = { id: string; th: string; desc: string; on: boolean; auto?: boolean };
+const EVAL_CRITERIA_DEFAULT: EvalCrit[] = [
+  { id: "punctual", th: "ตรงเวลา", desc: "นับจากการตอกบัตร: สาย + ขาดไม่แจ้ง", on: true, auto: true },
+  { id: "helpful", th: "ช่วยงานโดยไม่ต้องสั่ง", desc: "เก็บโต๊ะ ช่วยตำแหน่งอื่น เมื่อเห็นงาน", on: true },
+  { id: "clean", th: "ความสะอาดโซนตัวเอง", desc: "ก่อนปิดร้าน โซนของตัวเองเรียบร้อย", on: true },
+  { id: "focus", th: "ตั้งใจทำงาน", desc: "ไม่ยืนคุยหรือเล่นมือถือจนงานค้าง", on: true },
+];
+const EVAL_LEVELS_TH = ["ดีมาก", "ดี", "พอใช้", "ต้องปรับปรุง"];
+const EVAL_DEFAULTS = {
+  enabled: false,
+  late_grace_min: 10,           // late counts only beyond this many minutes
+  late_cut: [5, 10],            // late count ≤ 5 → 3 · ≤ 10 → 2 · more → 1
+  note_cut: [0, 2],             // net 👎 ≤ 0 → 3 · ≤ 2 → 2 · more → 1
+  level_min: [11, 9, 7, 0],     // score out of 12 for ดีมาก / ดี / พอใช้ / ต้องปรับปรุง
+  level_pct: [100, 70, 40, 0],
+  cap_if_one: true,             // any criterion at 1 → at best พอใช้
+  bonus_max: 1000,
+  show_on_bill: true,
+  weekly: true, weekly_day: 0, weekly_hour: 20, // reminder to the admin (0 = Sunday)
+  kudos: true,                  // staff can praise a colleague (praise only)
+  criteria: EVAL_CRITERIA_DEFAULT,
+};
+type EvalCfg = typeof EVAL_DEFAULTS;
+
+function evalCfg(raw: unknown): EvalCfg {
+  const r = (raw && typeof raw === "object") ? raw as Record<string, unknown> : {};
+  const num = (v: unknown, def: number, lo: number, hi: number) => { const n = Number(v); return Number.isFinite(n) ? Math.min(hi, Math.max(lo, Math.round(n))) : def; };
+  const pair = (v: unknown, def: number[], hi: number) => Array.isArray(v) && v.length === 2 ? [num(v[0], def[0], 0, hi), num(v[1], def[1], 0, hi)].sort((a, b) => a - b) : def;
+  const four = (v: unknown, def: number[], hi: number) => Array.isArray(v) && v.length === 4 ? v.map((x, i) => num(x, def[i], 0, hi)) : def;
+  let criteria = EVAL_CRITERIA_DEFAULT;
+  if (Array.isArray(r.criteria) && r.criteria.length) {
+    criteria = (r.criteria as Array<Record<string, unknown>>).slice(0, 8).map((c, i) => {
+      const id = String(c.id ?? "").replace(/[^a-z0-9_]/gi, "").slice(0, 20) || `c${i}`;
+      return { id, th: String(c.th ?? "").trim().slice(0, 60) || id, desc: String(c.desc ?? "").trim().slice(0, 120), on: c.on !== false, auto: id === "punctual" };
+    });
+    if (!criteria.some((c) => c.id === "punctual")) criteria.unshift({ ...EVAL_CRITERIA_DEFAULT[0], on: false });
+  }
+  return {
+    enabled: !!r.enabled,
+    late_grace_min: num(r.late_grace_min, 10, 0, 240),
+    late_cut: pair(r.late_cut, [5, 10], 31),
+    note_cut: pair(r.note_cut, [0, 2], 31),
+    level_min: four(r.level_min, [11, 9, 7, 0], 12),
+    level_pct: four(r.level_pct, [100, 70, 40, 0], 100),
+    cap_if_one: r.cap_if_one === undefined ? true : !!r.cap_if_one,
+    bonus_max: num(r.bonus_max, 1000, 0, 1000000),
+    show_on_bill: r.show_on_bill === undefined ? true : !!r.show_on_bill,
+    weekly: r.weekly === undefined ? true : !!r.weekly,
+    weekly_day: num(r.weekly_day, 0, 0, 6), weekly_hour: num(r.weekly_hour, 20, 0, 23),
+    kudos: r.kudos === undefined ? true : !!r.kudos,
+    criteria,
+  };
+}
+
+async function branchEval(branchId: string): Promise<EvalCfg | null> {
+  const { data, error } = await supabase.from("branches").select("eval").eq("id", branchId).maybeSingle();
+  return error ? null : evalCfg(data?.eval);
+}
+
+const scoreOf = (n: number, cut: number[]) => n <= cut[0] ? 3 : n <= cut[1] ? 2 : 1;
+
+function evalLevel(cfg: EvalCfg, scores: Record<string, number>) {
+  const on = cfg.criteria.filter((c) => c.on);
+  const total = on.reduce((m, c) => m + (Number(scores[c.id]) || 0), 0);
+  const max = on.length * 3 || 12;
+  const scaled = Math.round(total * 12 / max);
+  let level = cfg.level_min.findIndex((m) => scaled >= m);
+  if (level < 0) level = 3;
+  if (cfg.cap_if_one && on.some((c) => Number(scores[c.id]) === 1) && level < 2) level = 2;
+  return { total, max, scaled, level, pct: cfg.level_pct[level] };
+}
+
+type EvalNote = { id: number; staff_id: number; crit: string | null; sign: number; note: string; date: string; source: string; status: string; from_staff_id: number | null; created_at: string };
+
+// What the system suggests for one person and period, from the clock and the notes.
+function evalSuggest(cfg: EvalCfg, sum: Awaited<ReturnType<typeof computeSummary>>, notes: EvalNote[]) {
+  const counted = notes.filter((n) => n.status === "ok" && n.crit);
+  const lateDays = sum.days.filter((d) => d.late_min > cfg.late_grace_min).length;
+  const absent = sum.totals.absent_days;
+  const out: Record<string, { score: number; down: number; up: number; late?: number; absent?: number }> = {};
+  for (const c of cfg.criteria) {
+    const down = counted.filter((n) => n.crit === c.id && n.sign < 0).length;
+    const up = counted.filter((n) => n.crit === c.id && n.sign > 0).length;
+    if (c.id === "punctual") out[c.id] = { score: scoreOf(Math.max(0, lateDays + absent + down - up), cfg.late_cut), down, up, late: lateDays, absent };
+    else out[c.id] = { score: scoreOf(Math.max(0, down - up), cfg.note_cut), down, up };
+  }
+  return out;
+}
+
+async function loadEvaluation(staffId: number, periodStart: string) {
+  const { data, error } = await supabase.from("evaluations").select("*").eq("staff_id", staffId).eq("period_start", periodStart).maybeSingle();
+  return error ? null : data;
+}
+
+// Criteria and level names live in translations (eval.*) so the translate button covers them.
+async function saveEvalTexts(cfg: EvalCfg) {
+  const want: Record<string, string> = {};
+  for (const c of cfg.criteria) { want[`eval.crit.${c.id}.name`] = c.th; want[`eval.crit.${c.id}.desc`] = c.desc; }
+  EVAL_LEVELS_TH.forEach((t, i) => { want[`eval.level.${i}`] = t; });
+  const prev = new Map((await getTranslations(Object.keys(want))).map((r) => [r.key, r]));
+  const rows = Object.entries(want).filter(([k, th]) => prev.get(k)?.th !== th)
+    .map(([key, th]) => ({ key, th, en: "", my: "", lo: "", km: "", vi: "", edited: [], updated_at: new Date().toISOString() }));
+  if (rows.length) await supabase.from("translations").upsert(rows);
+}
+
+async function handleEvalSettings(p: Record<string, unknown>) {
+  { const g = await adminGate(p); if (g) return g; }
+  const cfg = await branchEval(String(p.branch_id ?? ""));
+  if (!cfg) return json({ ok: false, error: "need_migration_0011" });
+  return json({ ok: true, eval: cfg, levels: EVAL_LEVELS_TH });
+}
+
+async function handleSaveEvalSettings(p: Record<string, unknown>) {
+  { const g = await adminGate(p); if (g) return g; }
+  const id = String(p.branch_id ?? "");
+  const cfg = evalCfg(p.eval);
+  const { error } = await supabase.from("branches").update({ eval: cfg }).eq("id", id);
+  if (error) return json({ ok: false, error: "need_migration_0011" });
+  await saveEvalTexts(cfg);
+  await logAdmin("save_eval", { id, enabled: cfg.enabled });
+  return json({ ok: true, eval: cfg });
+}
+
+// Admin: a quick note (👍/👎) during the month. Also used for the weekly check (many at once).
+async function handleEvalNote(p: Record<string, unknown>) {
+  { const g = await adminGate(p); if (g) return g; }
+  const branchId = String(p.branch_id ?? "");
+  const cfg = await branchEval(branchId);
+  if (!cfg) return json({ ok: false, error: "need_migration_0011" });
+  const list = Array.isArray(p.entries) ? p.entries as Array<Record<string, unknown>> : [p];
+  const { data: staff } = await supabase.from("staff").select("id").eq("branch_id", branchId);
+  const mine = new Set((staff ?? []).map((x) => x.id));
+  const ids = new Set(cfg.criteria.map((c) => c.id));
+  const date = isIsoDate(String(p.date ?? "")) ? String(p.date) : localDate(new Date());
+  const rows = [];
+  for (const e of list.slice(0, 200)) {
+    const staffId = Number(e.staff_id), crit = String(e.crit ?? ""), sign = Number(e.sign) < 0 ? -1 : 1;
+    if (!mine.has(staffId) || !ids.has(crit)) return json({ ok: false, error: "bad_entry" });
+    if (await isLocked(staffId, date)) return json({ ok: false, error: "locked" });
+    rows.push({ branch_id: branchId, staff_id: staffId, crit, sign, note: String(e.note ?? "").trim().slice(0, 200), date, source: p.entries ? "weekly" : "admin", status: "ok" });
+  }
+  if (!rows.length) return json({ ok: true, saved: 0 });
+  const { error } = await supabase.from("eval_notes").insert(rows);
+  if (error) return json({ ok: false, error: "need_migration_0011" });
+  return json({ ok: true, saved: rows.length });
+}
+
+async function handleEvalNotes(p: Record<string, unknown>) {
+  { const g = await adminGate(p); if (g) return g; }
+  const today = localDate(new Date());
+  const from = isIsoDate(String(p.from ?? "")) ? String(p.from) : addDays(today, -40);
+  const to = isIsoDate(String(p.to ?? "")) ? String(p.to) : today;
+  const { data, error } = await supabase.from("eval_notes").select("*").eq("branch_id", String(p.branch_id ?? ""))
+    .gte("date", from).lte("date", to).order("created_at", { ascending: false });
+  if (error) return json({ ok: false, error: "need_migration_0011" });
+  return json({ ok: true, notes: data ?? [] });
+}
+
+// Admin: delete a note, or turn a colleague's praise into 👍 for a criterion (or dismiss it).
+async function handleEvalNoteUpdate(p: Record<string, unknown>) {
+  { const g = await adminGate(p); if (g) return g; }
+  const { data: n } = await supabase.from("eval_notes").select("*").eq("id", Number(p.id) || 0).maybeSingle();
+  if (!n) return json({ ok: false, error: "not_found" });
+  if (await isLocked(n.staff_id, n.date)) return json({ ok: false, error: "locked" });
+  if (p.delete) await supabase.from("eval_notes").delete().eq("id", n.id);
+  else if (p.dismiss) await supabase.from("eval_notes").update({ status: "dismissed" }).eq("id", n.id);
+  else await supabase.from("eval_notes").update({ crit: String(p.crit ?? ""), status: "ok", sign: 1 }).eq("id", n.id);
+  return json({ ok: true });
+}
+
+// Admin: everyone's month — suggestions, saved results, notes.
+async function handleEvalMonth(p: Record<string, unknown>) {
+  { const g = await adminGate(p); if (g) return g; }
+  const b = await loadBranch(String(p.branch_id ?? ""));
+  if (!b) return json({ ok: false, error: "unknown_branch" });
+  const cfg = await branchEval(b.id);
+  if (!cfg) return json({ ok: false, error: "need_migration_0011" });
+  const { data: staff } = await supabase.from("staff").select("id, branch_id, name, label, active, pay, period").eq("branch_id", b.id).eq("active", true).order("sort").order("name");
+  const people = [];
+  for (const s of (staff ?? []) as StaffFull[]) {
+    const sum = await staffPeriodSummary(b, s, String(p.date ?? ""));
+    const { data: notes } = await supabase.from("eval_notes").select("*").eq("staff_id", s.id).gte("date", sum.period.start).lte("date", sum.period.end).order("date");
+    const ns = (notes ?? []) as EvalNote[];
+    people.push({
+      staff_id: s.id, label: s.label || s.name, period: { start: sum.period.start, end: sum.period.end }, locked: sum.locked,
+      suggest: evalSuggest(cfg, sum, ns), saved: await loadEvaluation(s.id, sum.period.start),
+      notes: ns.filter((n) => n.status === "ok" && n.crit),
+    });
+  }
+  return json({ ok: true, eval: cfg, levels: EVAL_LEVELS_TH, people });
+}
+
+// Admin: save one person's result for the period. Reasons picked for the bill get translated once here.
+async function handleEvalSave(p: Record<string, unknown>) {
+  { const g = await adminGate(p); if (g) return g; }
+  const s = await loadStaffFull(Number(p.staff_id) || 0);
+  if (!s) return json({ ok: false, error: "unknown_staff" });
+  const b = await loadBranch(s.branch_id);
+  if (!b) return json({ ok: false, error: "unknown_branch" });
+  const cfg = await branchEval(b.id);
+  if (!cfg) return json({ ok: false, error: "need_migration_0011" });
+  const sum = await staffPeriodSummary(b, s, String(p.date ?? ""));
+  if (sum.locked) return json({ ok: false, error: "locked" });
+  if (p.delete) { await supabase.from("evaluations").delete().eq("staff_id", s.id).eq("period_start", sum.period.start); return json({ ok: true }); }
+  const raw = (p.scores && typeof p.scores === "object") ? p.scores as Record<string, unknown> : {};
+  const scores: Record<string, number> = {};
+  for (const c of cfg.criteria.filter((x) => x.on)) {
+    const v = Math.round(Number(raw[c.id]));
+    if (![1, 2, 3].includes(v)) return json({ ok: false, error: "bad_score" });
+    scores[c.id] = v;
+  }
+  const lv = evalLevel(cfg, scores);
+  const bonusMax = Number.isFinite(Number(p.bonus_max)) ? Math.max(0, Math.round(Number(p.bonus_max))) : cfg.bonus_max;
+  const bonusOn = p.bonus_on !== false;
+  const bonus = bonusOn ? Math.round(bonusMax * lv.pct / 100) : 0;
+  // reasons: picked notes (good first), translated into every language once
+  const noteIds = (Array.isArray(p.reasons) ? p.reasons : []).map(Number).filter(Boolean).slice(0, 5);
+  let reasons: Array<Record<string, unknown>> = [];
+  if (noteIds.length) {
+    const { data: rs } = await supabase.from("eval_notes").select("*").in("id", noteIds).eq("staff_id", s.id);
+    const picked = ((rs ?? []) as EvalNote[]).filter((n) => n.note.trim()).sort((a, b2) => b2.sign - a.sign || a.date.localeCompare(b2.date));
+    let tr: Record<string, Record<string, string>> = {};
+    try { tr = await aiTranslate(Object.fromEntries(picked.map((n) => [`r${n.id}`, n.note]))); } catch (e) { console.error("reason translate failed", e); }
+    reasons = picked.map((n) => ({ id: n.id, sign: n.sign, date: n.date, crit: n.crit, th: n.note, tr: tr[`r${n.id}`] ?? {} }));
+  }
+  const row = {
+    branch_id: b.id, staff_id: s.id, period_start: sum.period.start, period_end: sum.period.end,
+    scores, total: lv.total, max: lv.max, level: lv.level, pct: lv.pct, bonus_on: bonusOn, bonus_max: bonusMax, bonus,
+    show: p.show === undefined ? cfg.show_on_bill : !!p.show, reasons, updated_at: new Date().toISOString(),
+  };
+  await supabase.from("evaluations").delete().eq("staff_id", s.id).eq("period_start", sum.period.start);
+  const { error } = await supabase.from("evaluations").insert(row);
+  if (error) return json({ ok: false, error: "need_migration_0011" });
+  await logAdmin("eval_save", { staff_id: s.id, start: sum.period.start, total: lv.total, level: lv.level, bonus });
+  return json({ ok: true, result: { ...row, scaled: lv.scaled } });
+}
+
+// Staff: praise a colleague (praise only — the admin decides what it counts for).
+async function handleKudos(p: Record<string, unknown>) {
+  const who = await staffByPin(p);
+  if (typeof who === "string") return json({ ok: false, error: who });
+  const cfg = await branchEval(who.b.id);
+  if (!cfg?.enabled || !cfg.kudos) return json({ ok: false, error: "kudos_off" });
+  if (p.list) {
+    const { data } = await supabase.from("staff").select("id, name, label").eq("branch_id", who.b.id).eq("active", true).neq("id", who.s.id).order("sort").order("name");
+    return json({ ok: true, people: (data ?? []).map((x) => ({ id: x.id, label: x.label || x.name })) });
+  }
+  const to = Number(p.to_staff_id) || 0;
+  const note = String(p.note ?? "").trim().slice(0, 200);
+  if (!note) return json({ ok: false, error: "kudos_empty" });
+  const { data: target } = await supabase.from("staff").select("id, branch_id, active").eq("id", to).maybeSingle();
+  if (!target || !target.active || target.branch_id !== who.b.id || target.id === who.s.id) return json({ ok: false, error: "unknown_staff" });
+  const { error } = await supabase.from("eval_notes").insert({
+    branch_id: who.b.id, staff_id: to, crit: null, sign: 1, note, date: localDate(new Date()), source: "kudos", from_staff_id: who.s.id, status: "new",
+  });
+  if (error) return json({ ok: false, error: "need_migration_0011" });
+  return json({ ok: true });
+}
+
+// ============================================================
 // Leave (ขอลา)
 // ============================================================
 
@@ -3047,6 +3326,14 @@ const ACTIONS: Record<string, (p: Record<string, unknown>) => Promise<Response>>
   decide_leave: handleDecideLeave,
   add_leave: handleAddLeave,
   save_absent_from: handleSaveAbsentFrom,
+  eval_settings: handleEvalSettings,
+  save_eval_settings: handleSaveEvalSettings,
+  eval_note: handleEvalNote,
+  eval_notes: handleEvalNotes,
+  eval_note_update: handleEvalNoteUpdate,
+  eval_month: handleEvalMonth,
+  eval_save: handleEvalSave,
+  kudos: handleKudos,
 };
 
 Deno.serve(async (req) => {

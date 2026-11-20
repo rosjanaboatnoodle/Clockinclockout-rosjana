@@ -41,6 +41,16 @@
   .tab.active{ background:#fff; color:#0f172a; }
   .goneBox{ margin-top:10px; }
   .goneBox > summary{ cursor:pointer; font-weight:900; color:#6b7280; padding:8px 0; }
+  .chip.on{ background:#3730a3; color:#fff; border-color:#3730a3; }
+  .evBig{ display:flex; gap:8px; margin-top:8px; }
+  .evBig button{ flex:1; border:none; border-radius:12px; padding:14px; font-size:17px; font-weight:900; cursor:pointer; }
+  .evUp{ background:#d1fae5; color:#065f46; } .evDown{ background:#fee2e2; color:#991b1b; }
+  .sbtn{ border:1px solid #c7d2fe; background:#fff; color:#3730a3; border-radius:10px; width:40px; height:36px; font-weight:900; font-size:15px; cursor:pointer; }
+  .sbtn.on{ background:#3730a3; color:#fff; } .sbtn.sug{ outline:2px dashed #a5b4fc; outline-offset:1px; }
+  .evRow{ display:flex; align-items:center; gap:8px; padding:6px 0; border-bottom:1px dashed #e5e7eb; flex-wrap:wrap; }
+  .evRow .nm{ flex:1; min-width:150px; font-weight:800; } .evRow .nm .sub{ font-weight:600; }
+  .wkCell{ border:1px solid #e5e7eb; background:#fff; border-radius:8px; width:44px; height:34px; font-size:16px; cursor:pointer; }
+  .evTotal{ margin-top:8px; padding:10px; border-radius:12px; background:#eef2ff; font-weight:900; }
   .staffCard{ border:1px solid #e5e7eb; border-radius:12px; padding:10px; margin-bottom:8px; }
   .staffCard.off{ opacity:.55; }
   .badge{ font-size:11px; font-weight:900; border-radius:999px; padding:2px 8px; }
@@ -172,6 +182,7 @@
       <button class="tab" data-tab="shifts" onclick="showTab('shifts')">กะ</button>
       <button class="tab" data-tab="pay" onclick="showTab('pay')">เงิน</button>
       <button class="tab" data-tab="adv" onclick="showTab('adv')">เบิกเงิน<span class="count hidden" id="advCount"></span></button>
+      <button class="tab" data-tab="eval" onclick="showTab('eval')">ประเมิน<span class="count hidden" id="evCount"></span></button>
       <button class="tab" data-tab="leave" onclick="showTab('leave')">ลา<span class="count hidden" id="leaveCount"></span></button>
       <button class="tab" data-tab="staff" onclick="showTab('staff')">พนักงาน</button>
       <button class="tab" data-tab="branches" onclick="showTab('branches')">สาขา<span class="count hidden" id="devCount"></span></button>
@@ -327,6 +338,67 @@
       <div class="hint">0 = ต้องกดอนุมัติทุกรายการ · เช่น ตั้ง 100 ค่าขนมไม่เกิน 100 บาทผ่านเลย ไม่ต้องกด</div>
       <div class="row"><button class="btn dark" onclick="saveAdvSettings()">บันทึก</button></div>
       <div class="status" id="advSetStatus"></div>
+    </div>
+
+    <!-- ประเมิน -->
+    <div class="card hidden" data-panel="eval" id="evOffCard">
+      <div class="cardTitle">📋 ประเมินประจำเดือน (ปิดอยู่)</div>
+      <div class="hint">จดบันทึก 👍/👎 ระหว่างเดือน → สิ้นเดือนระบบแนะนำคะแนนให้ → ระดับและโบนัสออกไปพร้อมบิลเงินเดือน (แปลภาษาพม่าให้) · เปิดใช้ได้ในการ์ด ⚙️ ตั้งค่าประเมิน ด้านล่าง</div>
+    </div>
+
+    <div class="card hidden" data-panel="eval" data-evon="1">
+      <div class="cardTitle">📝 จดด่วน</div>
+      <div class="hint">เลือกคน → เลือกเรื่อง → (พิมพ์ก็ได้ไม่พิมพ์ก็ได้) → กด 👍 หรือ 👎 · เด็กไม่เห็นบันทึกระหว่างเดือน</div>
+      <div class="chips" id="evPeople"></div>
+      <div class="chips" id="evCrits" style="margin-top:8px;"></div>
+      <div class="row"><input class="field" id="evNote" placeholder="เกิดอะไรขึ้น เช่น ช่วยเก็บโต๊ะโซนอื่นตอนลูกค้าเยอะ" maxlength="200"></div>
+      <div class="evBig"><button class="evUp" onclick="evQuick(1)">👍 ดี</button><button class="evDown" onclick="evQuick(-1)">👎 ต้องบอก</button></div>
+      <div class="status" id="evQuickStatus"></div>
+      <details style="margin-top:8px;"><summary class="hint" style="cursor:pointer; font-weight:900;">บันทึกล่าสุด</summary><div id="evRecent"></div></details>
+    </div>
+
+    <div class="card hidden" data-panel="eval" data-evon="1" id="evKudosCard">
+      <div class="cardTitle">💛 คำชมจากเพื่อน</div>
+      <div class="hint">เด็กชมกันเองได้อย่างเดียว ติไม่ได้ · เลือกว่าจะนับเป็น 👍 เรื่องไหน หรือกดข้าม</div>
+      <div id="evKudos"></div>
+    </div>
+
+    <div class="card hidden" data-panel="eval" data-evon="1">
+      <div class="cardTitle">📋 เช็คสัปดาห์นี้ (2 นาที)</div>
+      <div class="hint">กดช่องเพื่อสลับ – → 👍 → 👎 · ปล่อย – ถ้าปกติ · กดบันทึกทีเดียว</div>
+      <div class="tableWrap"><table id="evWeekly"></table></div>
+      <div class="row"><button class="btn dark" onclick="evWeeklySave()">บันทึกเช็คสัปดาห์นี้</button></div>
+      <div class="status" id="evWeeklyStatus"></div>
+    </div>
+
+    <div class="card hidden" data-panel="eval" data-evon="1">
+      <div class="cardTitle">🏁 สรุปรอบนี้ (ให้คะแนน + โบนัส)</div>
+      <div class="hint">ระบบแนะนำคะแนนจากบันทึกและการตอกบัตร (กรอบประ) กดเปลี่ยนได้ · ติ๊กบันทึกที่จะใส่เป็นเหตุผลในบิล · บันทึกแล้วโบนัสเข้ายอดเงินทันที · ปิดรอบแล้วแก้ไม่ได้</div>
+      <div class="row"><span class="hint" style="margin:0;">รอบที่มีวันที่</span><input class="field sm" id="evDate" type="date" style="min-width:150px;"><button class="btn" onclick="loadEvalMonth()">ดู</button></div>
+      <div id="evMonth"></div>
+    </div>
+
+    <div class="card hidden" data-panel="eval">
+      <div class="cardTitle">⚙️ ตั้งค่าประเมิน</div>
+      <label class="check"><input type="checkbox" id="evEnabled"> <b>ใช้ระบบประเมินในสาขานี้</b></label>
+      <div class="cardTitle" style="margin-top:10px; font-size:14px;">เกณฑ์ (ติ๊ก = ใช้ · แก้ชื่อได้)</div>
+      <div id="evCritEdit"></div>
+      <div class="row"><button class="btn" onclick="evAddCrit()">+ เพิ่มเกณฑ์</button></div>
+      <div class="cardTitle" style="margin-top:10px; font-size:14px;">วิธีนับคะแนน</div>
+      <div class="row"><span class="hint" style="margin:0;">ตรงเวลา: นับสายเมื่อเกิน</span><input class="field sm" id="evGrace" type="number" min="0"><span class="hint" style="margin:0;">นาที</span></div>
+      <div class="row"><span class="hint" style="margin:0;">ตรงเวลา: ได้ 3 ถ้าสาย+ขาดไม่เกิน</span><input class="field sm" id="evLate0" type="number" min="0"><span class="hint" style="margin:0;">ครั้ง · ได้ 2 ถ้าไม่เกิน</span><input class="field sm" id="evLate1" type="number" min="0"><span class="hint" style="margin:0;">ครั้ง · มากกว่านั้น 1</span></div>
+      <div class="row"><span class="hint" style="margin:0;">เกณฑ์อื่น (👎 − 👍): ได้ 3 ถ้าไม่เกิน</span><input class="field sm" id="evNote0" type="number" min="0"><span class="hint" style="margin:0;">· ได้ 2 ถ้าไม่เกิน</span><input class="field sm" id="evNote1" type="number" min="0"><span class="hint" style="margin:0;">· มากกว่านั้น 1</span></div>
+      <div class="cardTitle" style="margin-top:10px; font-size:14px;">ระดับ (คะแนนเทียบเต็ม 12) และโบนัส</div>
+      <div id="evLevels"></div>
+      <label class="check"><input type="checkbox" id="evCap"> มีข้อไหนได้ 1 → สูงสุดแค่ "พอใช้"</label>
+      <div class="row"><span class="hint" style="margin:0;">โบนัสเต็ม (บาท)</span><input class="field sm" id="evBonus" type="number" min="0"></div>
+      <label class="check"><input type="checkbox" id="evShow"> แสดงผลประเมินในบิล (ค่าเริ่มต้น เปลี่ยนรายคนได้) · ไม่แสดง = บิลมีแค่บรรทัดโบนัส</label>
+      <label class="check"><input type="checkbox" id="evWeeklyOn"> แจ้งเตือนแอดมินให้เช็คสัปดาห์ละครั้ง</label>
+      <div class="row"><span class="hint" style="margin:0;">วัน</span><select class="field sm" id="evWDay"><option value="0">อาทิตย์</option><option value="1">จันทร์</option><option value="2">อังคาร</option><option value="3">พุธ</option><option value="4">พฤหัส</option><option value="5">ศุกร์</option><option value="6">เสาร์</option></select><span class="hint" style="margin:0;">ตั้งแต่กี่โมง</span><input class="field sm" id="evWHour" type="number" min="0" max="23"></div>
+      <label class="check"><input type="checkbox" id="evKudosOn"> ให้พนักงานชมเพื่อนได้ (ชมอย่างเดียว)</label>
+      <div class="row"><button class="btn dark" onclick="saveEvalSettings()">บันทึกตั้งค่าประเมิน</button></div>
+      <div class="hint">เปลี่ยนชื่อเกณฑ์แล้ว ไปที่แท็บภาษา → แปลส่วนที่ยังไม่แปล เพื่อให้ขึ้นภาษาพม่า</div>
+      <div class="status" id="evSetStatus"></div>
     </div>
 
     <!-- ลา -->
@@ -589,7 +661,7 @@
 
 <div class="viewer" id="viewer" onclick="this.classList.remove('show')"><img id="viewerImg" alt=""></div>
 
-<script src="ui-text.js?v=20261121-2"></script><!-- แก้ ui-text.js แล้วเปลี่ยนเลข v ด้วย เครื่องเด็กจะได้โหลดไฟล์ใหม่ -->
+<script src="ui-text.js?v=20261121-3"></script><!-- แก้ ui-text.js แล้วเปลี่ยนเลข v ด้วย เครื่องเด็กจะได้โหลดไฟล์ใหม่ -->
 <script>
   // ใส่ค่าเดียวกับใน index.html
   const PROJECT_REF = "omsnqbuzyxyrsihybwmk";
@@ -729,7 +801,284 @@
     $("branchLink").value = b ? staffLink(b) : "";
     setMsg("linkStatus", "");
     // รายชื่อพนักงานต้องมาก่อน ส่วนอื่นใช้ชื่อจากรายชื่อนี้
-    loadStaff().then(() => { loadPunches(); loadReview(); loadPaySettings(); loadAccess(); loadNotify(); loadQr(); loadLeaves(); });
+    loadStaff().then(() => { loadPunches(); loadReview(); loadPaySettings(); loadAccess(); loadNotify(); loadQr(); loadLeaves(); loadEvalBadge(); });
+  }
+
+  // ---------- ประเมิน ----------
+  let evCfg = null, evLevelsTh = ["ดีมาก", "ดี", "พอใช้", "ต้องปรับปรุง"], evNotesAll = [];
+  const evSel = { staff: null, crit: null };
+  const evOnCrits = () => (evCfg ? evCfg.criteria.filter(c => c.on) : []);
+
+  async function loadEval(){
+    const want = branchId;
+    const j = await api({ action: "eval_settings", admin_pin: adminPin, branch_id: branchId });
+    if (want !== branchId) return;
+    if (!j || !j.ok){ setMsg("evSetStatus", j && j.error === "need_migration_0011" ? "ต้องรันไฟล์ 0011_eval.sql ใน Supabase ก่อน" : errText(j), false); return; }
+    evCfg = j.eval; evLevelsTh = j.levels || evLevelsTh;
+    fillEvalSettings();
+    showEvalCards();
+    if (evCfg.enabled){
+      renderEvQuick(); await loadEvNotes(); renderEvWeekly();
+      if (!$("evDate").value) $("evDate").value = localDateStr(new Date());
+      loadEvalMonth();
+    }
+  }
+
+  function showEvalCards(){
+    const tabOn = document.querySelector('.tab[data-tab="eval"]').classList.contains("active");
+    const on = !!(evCfg && evCfg.enabled);
+    $("evOffCard").classList.toggle("hidden", !tabOn || on);
+    document.querySelectorAll('[data-evon="1"]').forEach(c => c.classList.toggle("hidden", !tabOn || !on));
+    if (tabOn && on) $("evKudosCard").classList.toggle("hidden", !evNotesAll.some(n => n.source === "kudos" && n.status === "new"));
+  }
+
+  function critName(id){ const c = evCfg && evCfg.criteria.find(x => x.id === id); return c ? c.th : id; }
+
+  // ตัวเลขคำชมจากเพื่อนที่ยังไม่ได้จัดการ บนแท็บประเมิน
+  async function loadEvalBadge(){
+    const j = await api({ action: "eval_notes", admin_pin: adminPin, branch_id: branchId });
+    const n = (j && j.ok) ? j.notes.filter(x => x.source === "kudos" && x.status === "new").length : 0;
+    $("evCount").textContent = n; $("evCount").classList.toggle("hidden", !n);
+  }
+
+  function renderEvQuick(){
+    const pp = $("evPeople"); pp.innerHTML = "";
+    staffAll.filter(s => s.active).forEach(s => {
+      const c = el("button", "chip" + (evSel.staff === s.id ? " on" : ""), s.label || s.name);
+      c.onclick = () => { evSel.staff = s.id; renderEvQuick(); };
+      pp.appendChild(c);
+    });
+    const cc = $("evCrits"); cc.innerHTML = "";
+    evOnCrits().forEach(c => {
+      const b = el("button", "chip" + (evSel.crit === c.id ? " on" : ""), c.th);
+      b.onclick = () => { evSel.crit = c.id; renderEvQuick(); };
+      cc.appendChild(b);
+    });
+  }
+
+  async function evQuick(sign){
+    if (!evSel.staff){ setMsg("evQuickStatus", "เลือกคนก่อน", false); return; }
+    if (!evSel.crit){ setMsg("evQuickStatus", "เลือกเรื่องก่อน", false); return; }
+    const j = await api({ action: "eval_note", admin_pin: adminPin, branch_id: branchId, staff_id: evSel.staff, crit: evSel.crit, sign, note: $("evNote").value.trim() });
+    if (!j || !j.ok){ setMsg("evQuickStatus", errText(j), false); return; }
+    $("evNote").value = "";
+    setMsg("evQuickStatus", "บันทึกแล้ว " + (sign > 0 ? "👍 " : "👎 ") + staffName(evSel.staff) + " · " + critName(evSel.crit), true);
+    await loadEvNotes(); loadEvalMonth();
+  }
+
+  async function loadEvNotes(){
+    const j = await api({ action: "eval_notes", admin_pin: adminPin, branch_id: branchId });
+    evNotesAll = (j && j.ok) ? j.notes : [];
+    const box = $("evRecent"); box.innerHTML = "";
+    const list = evNotesAll.filter(n => n.status === "ok" && n.crit).slice(0, 30);
+    if (!list.length) box.appendChild(el("div", "hint", "ยังไม่มีบันทึก"));
+    list.forEach(n => {
+      const r = el("div", "advRow");
+      r.appendChild(el("span", "", (n.sign > 0 ? "👍 " : "👎 ") + staffName(n.staff_id) + " · " + critName(n.crit) + (n.note ? " · " + n.note : "") + " · " + fmtD(n.date) + (n.source === "weekly" ? " (เช็คสัปดาห์)" : n.source === "kudos" ? " (เพื่อนชม)" : "")));
+      const x = el("button", "btn", "ลบ");
+      x.onclick = async () => { if (!confirm("ลบบันทึกนี้?")) return; await api({ action: "eval_note_update", admin_pin: adminPin, id: n.id, delete: true }); loadEvNotes(); loadEvalMonth(); };
+      r.appendChild(x); box.appendChild(r);
+    });
+    // คำชมจากเพื่อนที่ยังไม่ได้จัดการ
+    const kb = $("evKudos"); kb.innerHTML = "";
+    const kud = evNotesAll.filter(n => n.source === "kudos" && n.status === "new");
+    $("evCount").textContent = kud.length; $("evCount").classList.toggle("hidden", !kud.length);
+    kud.forEach(n => {
+      const card = el("div", "staffCard");
+      card.appendChild(el("b", "", "💛 " + staffName(n.from_staff_id) + " ชม " + staffName(n.staff_id)));
+      card.appendChild(el("div", "hint", "“" + n.note + "” · " + fmtD(n.date)));
+      const r = el("div", "row");
+      const sel = el("select", "field sm");
+      evOnCrits().filter(c => c.id !== "punctual").forEach(c => { const o = el("option", "", c.th); o.value = c.id; sel.appendChild(o); });
+      const ok = el("button", "btn green", "นับเป็น 👍");
+      ok.onclick = async () => { await api({ action: "eval_note_update", admin_pin: adminPin, id: n.id, crit: sel.value }); loadEvNotes(); loadEvalMonth(); };
+      const no = el("button", "btn", "ข้าม");
+      no.onclick = async () => { await api({ action: "eval_note_update", admin_pin: adminPin, id: n.id, dismiss: true }); loadEvNotes(); };
+      r.append(sel, ok, no); card.appendChild(r); kb.appendChild(card);
+    });
+    showEvalCards();
+  }
+
+  // เช็คสัปดาห์: ตาราง คน × เกณฑ์ (ไม่รวมตรงเวลาที่ระบบนับเอง)
+  let evWeek = {};
+  function renderEvWeekly(){
+    evWeek = {};
+    const crits = evOnCrits().filter(c => c.id !== "punctual");
+    const t = $("evWeekly"); t.innerHTML = "";
+    const head = el("tr"); head.appendChild(el("th", "", "พนักงาน"));
+    crits.forEach(c => head.appendChild(el("th", "", c.th)));
+    t.appendChild(head);
+    staffAll.filter(s => s.active).forEach(s => {
+      const tr = el("tr"); tr.appendChild(el("td", "", s.label || s.name));
+      crits.forEach(c => {
+        const td = el("td"); const b = el("button", "wkCell", "–");
+        b.onclick = () => {
+          const k = s.id + "|" + c.id; const v = evWeek[k] || 0; const nv = v === 0 ? 1 : v === 1 ? -1 : 0;
+          if (nv) evWeek[k] = nv; else delete evWeek[k];
+          b.textContent = nv > 0 ? "👍" : nv < 0 ? "👎" : "–";
+        };
+        td.appendChild(b); tr.appendChild(td);
+      });
+      t.appendChild(tr);
+    });
+  }
+  async function evWeeklySave(){
+    const entries = Object.entries(evWeek).map(([k, sign]) => { const [sid, crit] = k.split("|"); return { staff_id: Number(sid), crit, sign }; });
+    if (!entries.length){ setMsg("evWeeklyStatus", "ไม่มีอะไรต้องบันทึก (ทุกคนปกติ)", true); return; }
+    const j = await api({ action: "eval_note", admin_pin: adminPin, branch_id: branchId, entries });
+    if (!j || !j.ok){ setMsg("evWeeklyStatus", errText(j), false); return; }
+    setMsg("evWeeklyStatus", "บันทึกแล้ว " + j.saved + " รายการ", true);
+    renderEvWeekly(); loadEvNotes(); loadEvalMonth();
+  }
+
+  // สรุปรอบ
+  async function loadEvalMonth(){
+    const box = $("evMonth"); box.innerHTML = "";
+    const j = await api({ action: "eval_month", admin_pin: adminPin, branch_id: branchId, date: $("evDate").value });
+    if (!j || !j.ok){ box.appendChild(el("div", "status", errText(j))); return; }
+    evCfg = j.eval;
+    j.people.forEach(p => box.appendChild(evPersonCard(p)));
+  }
+
+  function setMsg2(e, text, ok){ e.textContent = text; e.style.color = ok ? "#047857" : (ok === false ? "#dc2626" : "#374151"); }
+
+  function evPersonCard(p){
+    const saved = p.saved;
+    const card = el("div", "staffCard");
+    card.appendChild(el("b", "", p.label + " · " + fmtD(p.period.start) + " – " + fmtD(p.period.end) + (p.locked ? " 🔒" : "") + (saved ? " · ✅ บันทึกแล้ว" : "")));
+    const scores = {};
+    const totalBox = el("div", "evTotal");
+    const bonusOn = el("input"); bonusOn.type = "checkbox"; bonusOn.checked = saved ? saved.bonus_on : true; bonusOn.disabled = p.locked;
+    const bonusMax = el("input", "field sm"); bonusMax.type = "number"; bonusMax.min = "0"; bonusMax.value = saved ? saved.bonus_max : evCfg.bonus_max; bonusMax.disabled = p.locked;
+    const show = el("input"); show.type = "checkbox"; show.checked = saved ? saved.show : evCfg.show_on_bill; show.disabled = p.locked;
+    const recalc = () => {
+      const on = evOnCrits();
+      const total = on.reduce((m, c) => m + (scores[c.id] || 0), 0);
+      const max = on.length * 3 || 12;
+      const scaled = Math.round(total * 12 / max);
+      let lv = evCfg.level_min.findIndex(m => scaled >= m); if (lv < 0) lv = 3;
+      if (evCfg.cap_if_one && on.some(c => scores[c.id] === 1) && lv < 2) lv = 2;
+      const pct = evCfg.level_pct[lv];
+      const bonus = bonusOn.checked ? Math.round(Number(bonusMax.value || 0) * pct / 100) : 0;
+      totalBox.textContent = total + "/" + max + " · " + evLevelsTh[lv] + " · โบนัส " + pct + "% = " + bonus.toLocaleString("th-TH") + " บาท" + (lv === 3 ? " · 💬 นัดคุยตัวต่อตัว" : "");
+    };
+    evOnCrits().forEach(c => {
+      const sg = p.suggest[c.id] || { score: 3, down: 0, up: 0 };
+      scores[c.id] = saved && saved.scores && saved.scores[c.id] ? saved.scores[c.id] : sg.score;
+      const row = el("div", "evRow");
+      const nm = el("div", "nm", c.th);
+      const info = c.id === "punctual"
+        ? "สายเกิน " + evCfg.late_grace_min + " นาที " + (sg.late || 0) + " ครั้ง · ขาด " + (sg.absent || 0) + (sg.down || sg.up ? " · 👎" + sg.down + " 👍" + sg.up : "")
+        : "👎 " + sg.down + " · 👍 " + sg.up;
+      nm.appendChild(el("div", "sub", info + " → แนะนำ " + sg.score));
+      row.appendChild(nm);
+      [1, 2, 3].forEach(v => {
+        const b = el("button", "sbtn" + (scores[c.id] === v ? " on" : "") + (sg.score === v ? " sug" : ""), String(v));
+        b.disabled = p.locked;
+        b.onclick = () => { scores[c.id] = v; row.querySelectorAll(".sbtn").forEach(x => x.classList.toggle("on", x.textContent === String(v))); recalc(); };
+        row.appendChild(b);
+      });
+      card.appendChild(row);
+    });
+    // เหตุผลในบิล
+    const picked = new Set(((saved && saved.reasons) || []).map(r => r.id));
+    const withText = p.notes.filter(n => n.note);
+    if (withText.length){
+      card.appendChild(el("div", "hint", "ติ๊กเหตุผลที่จะใส่ในบิล (สูงสุด 5 · เรื่องดีขึ้นก่อน):"));
+      withText.sort((a, b) => b.sign - a.sign).forEach(n => {
+        const lab = el("label", "check"); const cb = el("input");
+        cb.type = "checkbox"; cb.value = n.id; cb.checked = picked.has(n.id); cb.disabled = p.locked; cb.className = "evReason";
+        lab.append(cb, document.createTextNode(" " + (n.sign > 0 ? "👍 " : "👎 ") + critName(n.crit) + " · " + n.note + " · " + fmtD(n.date)));
+        card.appendChild(lab);
+      });
+    }
+    card.appendChild(totalBox);
+    const opts = el("div", "row");
+    const l1 = el("label", "check"); l1.append(bonusOn, document.createTextNode(" ให้โบนัส"));
+    const l2 = el("label", "check"); l2.append(show, document.createTextNode(" แสดงผลประเมินในบิล"));
+    opts.append(l1, el("span", "hint", "โบนัสเต็ม"), bonusMax, l2);
+    card.appendChild(opts);
+    bonusOn.onchange = recalc; bonusMax.oninput = recalc;
+    const act = el("div", "row"); const st = el("div", "status");
+    if (!p.locked){
+      const save = el("button", "btn green", saved ? "บันทึกใหม่" : "บันทึกผลประเมิน");
+      save.onclick = async () => {
+        save.disabled = true; setMsg2(st, "กำลังบันทึก (แปลเหตุผลเป็นภาษาอื่นด้วย)…");
+        const reasons = [...card.querySelectorAll(".evReason")].filter(x => x.checked).map(x => Number(x.value)).slice(0, 5);
+        const j = await api({ action: "eval_save", admin_pin: adminPin, staff_id: p.staff_id, date: p.period.start, scores, bonus_on: bonusOn.checked, bonus_max: Number(bonusMax.value || 0), show: show.checked, reasons });
+        save.disabled = false;
+        if (!j || !j.ok){ setMsg2(st, errText(j), false); return; }
+        setMsg2(st, "บันทึกแล้ว · โบนัส " + Number(j.result.bonus).toLocaleString("th-TH") + " บาท เข้ายอดเงินแล้ว (ดูในแท็บเงิน / บิล)", true);
+      };
+      act.appendChild(save);
+      if (saved){
+        const del = el("button", "btn", "ลบผลประเมิน");
+        del.onclick = async () => {
+          if (!confirm("ลบผลประเมินของ " + p.label + "? โบนัสจะหายจากยอดเงิน")) return;
+          await api({ action: "eval_save", admin_pin: adminPin, staff_id: p.staff_id, date: p.period.start, delete: true });
+          loadEvalMonth();
+        };
+        act.appendChild(del);
+      }
+    } else act.appendChild(el("span", "hint", "รอบนี้ปิดแล้ว แก้ไม่ได้"));
+    card.append(act, st);
+    recalc();
+    return card;
+  }
+
+  // ตั้งค่า
+  function fillEvalSettings(){
+    const c = evCfg;
+    $("evEnabled").checked = c.enabled; $("evGrace").value = c.late_grace_min;
+    $("evLate0").value = c.late_cut[0]; $("evLate1").value = c.late_cut[1];
+    $("evNote0").value = c.note_cut[0]; $("evNote1").value = c.note_cut[1];
+    $("evCap").checked = c.cap_if_one; $("evBonus").value = c.bonus_max; $("evShow").checked = c.show_on_bill;
+    $("evWeeklyOn").checked = c.weekly; $("evWDay").value = String(c.weekly_day); $("evWHour").value = c.weekly_hour;
+    $("evKudosOn").checked = c.kudos;
+    renderCritEdit();
+    const lv = $("evLevels"); lv.innerHTML = "";
+    evLevelsTh.forEach((name, i) => {
+      const r = el("div", "row");
+      const lab = el("span", "hint", name + ": ตั้งแต่"); lab.style.cssText = "margin:0; min-width:120px;";
+      const mn = el("input", "field sm"); mn.type = "number"; mn.min = "0"; mn.max = "12"; mn.value = c.level_min[i]; mn.id = "evLvMin" + i;
+      if (i === 3){ mn.disabled = true; mn.value = 0; }
+      const pc = el("input", "field sm"); pc.type = "number"; pc.min = "0"; pc.max = "100"; pc.value = c.level_pct[i]; pc.id = "evLvPct" + i;
+      r.append(lab, mn, el("span", "hint", "คะแนน · โบนัส"), pc, el("span", "hint", "%"));
+      lv.appendChild(r);
+    });
+  }
+  function renderCritEdit(){
+    const box = $("evCritEdit"); box.innerHTML = "";
+    evCfg.criteria.forEach((c, i) => {
+      const r = el("div", "row");
+      const on = el("input"); on.type = "checkbox"; on.checked = c.on; on.onchange = () => { c.on = on.checked; };
+      const nm = el("input", "field"); nm.value = c.th; nm.placeholder = "ชื่อเกณฑ์"; nm.oninput = () => { c.th = nm.value; };
+      const ds = el("input", "field"); ds.value = c.desc; ds.placeholder = "คำอธิบายสั้นๆ"; ds.oninput = () => { c.desc = ds.value; };
+      r.append(on, nm, ds);
+      if (c.id === "punctual") r.appendChild(el("span", "hint", "⏱️ นับจากตอกบัตร"));
+      else { const x = el("button", "btn", "ลบ"); x.onclick = () => { evCfg.criteria.splice(i, 1); renderCritEdit(); }; r.appendChild(x); }
+      box.appendChild(r);
+    });
+  }
+  function evAddCrit(){
+    if (evCfg.criteria.length >= 8){ setMsg("evSetStatus", "สูงสุด 8 เกณฑ์", false); return; }
+    evCfg.criteria.push({ id: "c" + Date.now().toString(36), th: "", desc: "", on: true });
+    renderCritEdit();
+  }
+  async function saveEvalSettings(){
+    const n = id => Number($(id).value);
+    const cfg = Object.assign({}, evCfg, {
+      enabled: $("evEnabled").checked, late_grace_min: n("evGrace"),
+      late_cut: [n("evLate0"), n("evLate1")], note_cut: [n("evNote0"), n("evNote1")],
+      level_min: [0, 1, 2, 3].map(i => i === 3 ? 0 : n("evLvMin" + i)), level_pct: [0, 1, 2, 3].map(i => n("evLvPct" + i)),
+      cap_if_one: $("evCap").checked, bonus_max: n("evBonus"), show_on_bill: $("evShow").checked,
+      weekly: $("evWeeklyOn").checked, weekly_day: n("evWDay"), weekly_hour: n("evWHour"), kudos: $("evKudosOn").checked,
+      criteria: evCfg.criteria.filter(x => (x.th || "").trim()),
+    });
+    const j = await api({ action: "save_eval_settings", admin_pin: adminPin, branch_id: branchId, eval: cfg });
+    if (!j || !j.ok){ setMsg("evSetStatus", j && j.error === "need_migration_0011" ? "ต้องรันไฟล์ 0011_eval.sql ใน Supabase ก่อน" : errText(j), false); return; }
+    setMsg("evSetStatus", "บันทึกแล้ว", true);
+    await loadEval();
   }
 
   // ---------- ลา ----------
@@ -753,7 +1102,6 @@
     renderLeaves();
   }
 
-  function staffName(id){ const x = staffAll.find(s => s.id === id); return x ? (x.label || x.name) : "#" + id; }
   function fmtD(d){ try{ return new Date(d + "T00:00:00").toLocaleDateString("th-TH", { weekday: "short", day: "numeric", month: "short" }); } catch(e){ return d; } }
 
   function renderLeaves(){
@@ -2053,8 +2401,32 @@
       : T("billDailyRate", { r: num(rates.daily_rate), n: num(t.days_worked) }), money(t.base));
     if (t.ot_hours) line(T("billOt"), rates.ot_rate ? T("billOtRate", { h: num(t.ot_hours), r: num(rates.ot_rate) }) : num(t.ot_hours) + " " + T("billHrs"), money(t.ot_pay));
     if (t.late_deduct) line(T("billLate"), T("billLateInfo", { n: t.late_times, m: t.late_min }), "−" + money(t.late_deduct));
+    const ev = b.eval;
+    if (t.bonus) line(T("billBonus"), ev ? T("billBonusInfo", { p: ev.pct, max: money(ev.bonus_max) }) : "", "+" + money(t.bonus));
     line(T("billGross"), "", money(t.gross), "sum");
     bill.appendChild(tbl);
+
+    // ผลประเมิน (ถ้าแอดมินเลือกให้แสดง) ชื่อเกณฑ์/ระดับ/เหตุผล ตามภาษาของบิล
+    if (ev && ev.show){
+      const evText = (key, th) => dict[key] || th;
+      bill.appendChild(el("div", "sec", T("billEvalTitle") + " · " + ev.total + "/" + ev.max + " · " + evText("eval.level." + ev.level, ["ดีมาก", "ดี", "พอใช้", "ต้องปรับปรุง"][ev.level])));
+      const et = el("table");
+      (ev.criteria || []).filter(c => ev.scores && ev.scores[c.id]).forEach(c => {
+        const tr = el("tr");
+        tr.appendChild(el("td", "", evText("eval.crit." + c.id + ".name", c.th)));
+        tr.appendChild(el("td", "num", "●".repeat(ev.scores[c.id]) + "○".repeat(3 - ev.scores[c.id])));
+        et.appendChild(tr);
+      });
+      (ev.reasons || []).forEach(r => {
+        const tr = el("tr"); const td = el("td");
+        td.colSpan = 2;
+        const own = lang === "th" ? r.th : ((r.tr && r.tr[lang]) || r.th);
+        td.appendChild(document.createTextNode((r.sign > 0 ? "👍 " : "👎 ") + own));
+        if (lang !== "th") td.appendChild(el("div", "sub", r.th));
+        tr.appendChild(td); et.appendChild(tr);
+      });
+      bill.appendChild(et);
+    }
 
     bill.appendChild(el("div", "sec", T("billAdvances")));
     const at = el("table");
@@ -2219,7 +2591,7 @@
         ["ชม.พัก", String(t.break_hours || 0)], ["กลับก่อน", (t.early_min || 0) + " น."],
         ["เบิก", (t.advances ? "−" : "") + baht(t.advances)], ["รออนุมัติ", baht(t.pending)],
         ["ขาดไม่แจ้ง", String(t.absent_days || 0)], ["ลา", String(t.leave_days || 0)]
-      ]);
+      ].concat(t.bonus ? [["โบนัสประเมิน", "+" + baht(t.bonus)]] : []));
       const acts = el("div", "row"); acts.style.margin = "8px 0 0";
       const bb = el("button", "btn", "📄 บิล"); bb.onclick = () => openBill(p.staff_id, p.period.start);
       acts.appendChild(bb);
@@ -2355,7 +2727,7 @@
     if (all && !confirm("แปลใหม่ทั้งหมด? (ช่องที่แก้เองจะไม่ถูกทับ)")) return;
     const texts = {};
     Object.keys(UI_TH).forEach(k => { texts["ui.clock." + k] = UI_TH[k]; });
-    const r = await translateInBatches({ action: "translate_page", admin_pin: adminPin, texts, all }, "langStatus");
+    const r = await translateInBatches({ action: "translate_page", admin_pin: adminPin, texts, all, include_eval: true }, "langStatus");
     loadUiRows();
     if (r.ok) setMsg("langStatus", r.done ? "แปลแล้ว " + r.done + " ข้อความ เช็ค/แก้ได้ด้านล่าง" : "ทุกข้อความแปลไว้แล้ว", true);
   }
@@ -2417,6 +2789,7 @@
     if (name === "adv"){ loadPaySettings(); loadAdvances(); }
     if (name === "branches"){ loadAccess(); loadNotify(); loadQr(); }
     if (name === "leave"){ fillLeaveForm(); loadLeaves(); }
+    if (name === "eval") loadEval();
   }
 
   $("loginPin").addEventListener("keydown", e => { if (e.key === "Enter") doLogin(); });
