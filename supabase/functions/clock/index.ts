@@ -3399,6 +3399,34 @@ async function handlePosKeyStatus(p: Record<string, unknown>) {
   return json({ ok: true, on: !!(await getSetting<string | null>(POS_KEY, null)), devices: (await posSubs()).length });
 }
 
+// รายงานค่าแรงในหน้าเจ้าของร้าน POS (อ่านอย่างเดียว ต้องใช้รหัสแอดมิน):
+// รอบเงินเดือนที่ปิดแล้วซึ่งสิ้นสุดในช่วงวันที่ + เงินเบิกที่อนุมัติในช่วงวันที่ ทุกสาขา
+async function handlePosWages(p: Record<string, unknown>) {
+  { const g = await adminGate(p); if (g) return g; }
+  const from = String(p.from ?? ""), to = String(p.to ?? ""), ok = (d: string) => /^\d{4}-\d{2}-\d{2}$/.test(d);
+  if (!ok(from) || !ok(to) || from > to) return json({ ok: false, error: "bad_range" });
+  const [{ data: cl, error }, { data: adv }, { data: br }] = await Promise.all([
+    supabase.from("pay_closures").select("id, branch_id, staff_id, period_start, period_end, closed_at, summary")
+      .gte("period_end", from).lte("period_end", to).order("period_end").limit(2000),
+    supabase.from("advances").select("staff_id, branch_id, date, amount, status").eq("status", "approved")
+      .gte("date", from).lte("date", to).order("date").limit(5000),
+    supabase.from("branches").select("id, name"),
+  ]);
+  if (error) return json({ ok: false, error: error.message });
+  const bn = new Map(((br ?? []) as Array<{ id: string; name: string }>).map((b) => [b.id, b.name]));
+  const keys = ["days_worked", "worked_hours", "ot_hours", "base", "ot_pay", "bonus", "leave_pay", "late_deduct", "gross", "advances", "net"];
+  const closures = ((cl ?? []) as Array<Record<string, unknown>>).map((c) => {
+    const sm = (c.summary ?? {}) as Record<string, unknown>, t = (sm.totals ?? {}) as Record<string, unknown>, o: Record<string, number> = {};
+    for (const k of keys) o[k] = Number(t[k]) || 0;
+    return { staff_id: c.staff_id, label: String(sm.label ?? sm.name ?? ""), branch: bn.get(String(c.branch_id)) ?? String(c.branch_id ?? ""),
+      start: c.period_start, end: c.period_end, closed_at: c.closed_at, totals: o };
+  });
+  const { data: st } = await supabase.from("staff").select("id, name, label");
+  const sn = new Map(((st ?? []) as Array<{ id: number; name: string; label: string | null }>).map((x) => [x.id, x.label || x.name]));
+  const advances = ((adv ?? []) as Array<Record<string, unknown>>).map((a) => ({ staff_id: a.staff_id, label: sn.get(Number(a.staff_id)) ?? "", branch: bn.get(String(a.branch_id)) ?? "", date: a.date, amount: Number(a.amount) || 0 }));
+  return json({ ok: true, closures, advances });
+}
+
 async function posSubs(): Promise<PosSub[]> {
   const v = await getSetting<PosSub[]>("pos_subs", []);
   return Array.isArray(v) ? v : [];
@@ -3542,6 +3570,7 @@ const ACTIONS: Record<string, (p: Record<string, unknown>) => Promise<Response>>
   pos_push: handlePosPush,
   pos_key_set: handlePosKeySet,
   pos_key_status: handlePosKeyStatus,
+  pos_wages: handlePosWages,
 };
 
 Deno.serve(async (req) => {
