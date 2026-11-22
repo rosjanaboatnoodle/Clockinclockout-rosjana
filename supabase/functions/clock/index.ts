@@ -3374,6 +3374,31 @@ async function handleAddLeave(p: Record<string, unknown>) {
 type PosSub = { endpoint: string; p256dh: string; auth: string; name: string; types: string[]; at: string };
 const POS_TYPES = ["order", "cooked", "served", "cancel", "move", "call", "paid", "shift", "test"];
 const posText = (v: unknown, n: number) => String(v ?? "").replace(/[\u0000-\u001f\u007f]/g, " ").trim().slice(0, n);
+// รหัส POS (ไม่บังคับ): ตั้งในหน้าแอดมิน → ทุกคำสั่ง pos_* ต้องส่งรหัสถูก ยังไม่ตั้ง = ทำงานแบบเดิม
+// ไม่ล็อกเมื่อใส่ผิด (กันคนนอกสั่งผิดซ้ำๆ จนเครื่องร้านใช้ไม่ได้) รหัสยาวพอจนเดาไม่ได้
+const POS_KEY = "pos_key_hash";
+async function posGate(p: Record<string, unknown>): Promise<Response | null> {
+  const h = await getSetting<string | null>(POS_KEY, null);
+  if (!h) return null;
+  const k = String(p.pos_key ?? "").trim();
+  if (k && await checkPassword(h, k)) return null;
+  return json({ ok: false, error: k ? "wrong_pos_key" : "need_pos_key" });
+}
+
+// แอดมิน: ตั้ง/เปลี่ยน/ลบรหัส POS (new_key "" = ลบ)
+async function handlePosKeySet(p: Record<string, unknown>) {
+  { const g = await adminGate(p); if (g) return g; }
+  const k = String(p.new_key ?? "").trim();
+  if (k && !/^[A-Za-z0-9]{8,32}$/.test(k)) return json({ ok: false, error: "pos_key_format" });
+  await setSetting(POS_KEY, k ? await hashPassword(k) : null);
+  await logAdmin("pos_key_set", { on: !!k });
+  return json({ ok: true, on: !!k });
+}
+async function handlePosKeyStatus(p: Record<string, unknown>) {
+  { const g = await adminGate(p); if (g) return g; }
+  return json({ ok: true, on: !!(await getSetting<string | null>(POS_KEY, null)), devices: (await posSubs()).length });
+}
+
 async function posSubs(): Promise<PosSub[]> {
   const v = await getSetting<PosSub[]>("pos_subs", []);
   return Array.isArray(v) ? v : [];
@@ -3381,6 +3406,7 @@ async function posSubs(): Promise<PosSub[]> {
 
 // เครื่องนี้รับแจ้งเตือน POS (เรียกซ้ำได้ เพื่อเปลี่ยนชื่อ/ชนิดที่รับ)
 async function handlePosSubscribe(p: Record<string, unknown>) {
+  { const g = await posGate(p); if (g) return g; }
   const sub = cleanSub(p.sub);
   if (!sub) return json({ ok: false, error: "bad_sub" });
   const types = Array.isArray(p.types) ? (p.types as unknown[]).map(String).filter((t) => POS_TYPES.includes(t)) : POS_TYPES.slice();
@@ -3394,17 +3420,20 @@ async function handlePosSubscribe(p: Record<string, unknown>) {
 }
 
 async function handlePosUnsubscribe(p: Record<string, unknown>) {
+  { const g = await posGate(p); if (g) return g; }
   const ep = String(p.endpoint ?? ""), id = String(p.id ?? "");
   await setSetting("pos_subs", (await posSubs()).filter((x) => x.endpoint !== ep && (!id || !x.endpoint.endsWith(id))));
   return json({ ok: true });
 }
 
-async function handlePosSubs() {
+async function handlePosSubs(p: Record<string, unknown>) {
+  { const g = await posGate(p); if (g) return g; }
   return json({ ok: true, subs: (await posSubs()).map((x) => ({ id: x.endpoint.slice(-16), name: x.name, types: x.types, at: x.at })) });
 }
 
 // มีเหตุการณ์ใน POS → ส่งให้ทุกเครื่องที่เลือกรับชนิดนั้น (ยกเว้นเครื่องที่กดเอง) · event ซ้ำส่งครั้งเดียว
 async function handlePosPush(p: Record<string, unknown>) {
+  { const g = await posGate(p); if (g) return g; }
   const type = String(p.type ?? "");
   if (!POS_TYPES.includes(type)) return json({ ok: false, error: "bad_type" });
   const title = posText(p.title, 60), body = posText(p.body, 300);
@@ -3511,6 +3540,8 @@ const ACTIONS: Record<string, (p: Record<string, unknown>) => Promise<Response>>
   pos_unsubscribe: handlePosUnsubscribe,
   pos_subs: handlePosSubs,
   pos_push: handlePosPush,
+  pos_key_set: handlePosKeySet,
+  pos_key_status: handlePosKeyStatus,
 };
 
 Deno.serve(async (req) => {

@@ -558,6 +558,17 @@
 
       <div class="cardTitle" style="margin-top:12px; font-size:14px;">เครื่องที่รับแจ้งเตือน</div>
       <div id="pushList"></div>
+
+      <div class="cardTitle" style="margin-top:12px; font-size:14px;">🍜 รหัส POS (แจ้งเตือนของแอป POS ร้าน)</div>
+      <div class="hint" id="posKeyInfo">กำลังโหลด…</div>
+      <div class="hint">ตั้งรหัสแล้ว คนนอกส่งแจ้งเตือนปลอม/ลบเครื่องในแอป POS ไม่ได้ · ใส่รหัสนี้ในแอป POS ทุกเครื่อง (ตั้งค่า → แจ้งเตือนเข้าเครื่องนี้) ครั้งเดียว · ตัวอักษรอังกฤษหรือตัวเลข 8–32 ตัว</div>
+      <div class="row">
+        <input class="field" id="posKeyNew" maxlength="32" autocomplete="off" placeholder="รหัส POS ใหม่">
+        <button class="btn" onclick="genPosKey()">สุ่ม</button>
+        <button class="btn dark" onclick="savePosKey(false)">บันทึกรหัส</button>
+        <button class="btn" onclick="savePosKey(true)">ยกเลิกรหัส</button>
+      </div>
+      <div class="status" id="posKeyStatus"></div>
     </div>
 
     <!-- ล็อกเพิ่ม (ไม่บังคับ) -->
@@ -1318,7 +1329,26 @@
     ["nAdmAdv", "admin_advance"], ["nAdmDev", "admin_device"], ["nAdmLate", "admin_late"], ["nAdmPunch", "admin_punch"], ["nAdmLeave", "admin_leave"], ["nLeaveRes", "leave_result"]];
   const NNUMS = [["nRemindMin", "remind_min"], ["nForgotMin", "forgot_after_min"], ["nDutyHour", "duty_hour"], ["nAbsentMin", "absent_after_min"]];
 
+  async function loadPosKey(){
+    const j = await api({ action: "pos_key_status", admin_pin: adminPin });
+    $("posKeyInfo").textContent = !j || !j.ok ? "ยังไม่มีส่วน POS ในฟังก์ชัน clock" : (j.on ? "✅ ตั้งรหัสแล้ว" : "ยังไม่ได้ตั้งรหัส (แจ้งเตือน POS เปิดให้ทุกคนใช้)") + (j && j.ok ? ` · แอป POS ที่เปิดแจ้งเตือน ${j.devices} เครื่อง` : "");
+  }
+  function genPosKey(){
+    const c = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789", r = crypto.getRandomValues(new Uint8Array(10));
+    $("posKeyNew").value = [...r].map((x) => c[x % c.length]).join("");
+  }
+  async function savePosKey(clear){
+    const k = clear ? "" : $("posKeyNew").value.trim();
+    if (clear && !confirm("ยกเลิกรหัส POS? แจ้งเตือน POS จะเปิดให้ทุกคนใช้อีก")) return;
+    if (!clear && !/^[A-Za-z0-9]{8,32}$/.test(k)) return setMsg("posKeyStatus", "รหัสต้องเป็นตัวอักษรอังกฤษหรือตัวเลข 8–32 ตัว", false);
+    const j = await api({ action: "pos_key_set", admin_pin: adminPin, new_key: k });
+    if (!j || !j.ok) return setMsg("posKeyStatus", errText(j), false);
+    setMsg("posKeyStatus", clear ? "ยกเลิกรหัสแล้ว" : "บันทึกแล้ว · จดรหัสนี้ไว้ใส่ในแอป POS: " + k, true);
+    loadPosKey();
+  }
+
   async function loadNotify(){
+    loadPosKey();
     const want = branchId;
     const j = await api({ action: "notify_settings", admin_pin: adminPin, branch_id: branchId });
     if (want !== branchId) return;
