@@ -539,6 +539,7 @@
       <label class="check"><input type="checkbox" id="nAdmAdv"> แอดมิน: มีคนขอเบิกเงิน</label>
       <label class="check"><input type="checkbox" id="nAdmDev"> แอดมิน: มีเครื่องใหม่รออนุญาต (ตอนเปิดล็อกกับเครื่อง)</label>
       <label class="check"><input type="checkbox" id="nAdmLate"> แอดมิน: มาสาย / ยังไม่มาตามกะ / ขาดไม่แจ้ง (ไม่มาเกิน 1 ชม.)</label>
+      <label class="check"><input type="checkbox" id="nAdmPunch"> แอดมิน: มีคนเข้างาน / ออกงาน (ทุกครั้ง)</label>
       <label class="check"><input type="checkbox" id="nAdmLeave"> แอดมิน: มีคนขอลา</label>
       <label class="check"><input type="checkbox" id="nLeaveRes"> พนักงาน: ผลการขอลา (อนุมัติ/ไม่อนุมัติ)</label>
       <div class="row"><span class="hint" style="margin:0;">ยังไม่มาหลังเริ่มกะกี่นาที</span><input class="field sm" id="nAbsentMin" type="number" min="0" max="720"></div>
@@ -1314,7 +1315,7 @@
   // ---------- แจ้งเตือน ----------
   let notifyData = null;
   const NFIELDS = [["nRemind", "remind"], ["nForgot", "forgot"], ["nAdv", "advance_result"], ["nDuty", "duty"],
-    ["nAdmAdv", "admin_advance"], ["nAdmDev", "admin_device"], ["nAdmLate", "admin_late"], ["nAdmLeave", "admin_leave"], ["nLeaveRes", "leave_result"]];
+    ["nAdmAdv", "admin_advance"], ["nAdmDev", "admin_device"], ["nAdmLate", "admin_late"], ["nAdmPunch", "admin_punch"], ["nAdmLeave", "admin_leave"], ["nLeaveRes", "leave_result"]];
   const NNUMS = [["nRemindMin", "remind_min"], ["nForgotMin", "forgot_after_min"], ["nDutyHour", "duty_hour"], ["nAbsentMin", "absent_after_min"]];
 
   async function loadNotify(){
