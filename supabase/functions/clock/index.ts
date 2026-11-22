@@ -919,7 +919,7 @@ async function handlePunch(p: Record<string, unknown>) {
   if (!signedIn && !/^\d{4,6}$/.test(pin)) return json({ ok: false, error: "pin_invalid" });
 
   const { data: person } = await supabase.from("staff")
-    .select("id, branch_id, name, active, pin_hash").eq("id", staffId).maybeSingle();
+    .select("id, branch_id, name, label, active, pin_hash").eq("id", staffId).maybeSingle();
   if (!person || !person.active || person.branch_id !== branchId) return json({ ok: false, error: "unknown_staff" });
   const pinErr = signedIn ? null : await staffPinError(person, pin);
   if (pinErr) return json({ ok: false, error: pinErr });
@@ -990,6 +990,7 @@ async function handlePunch(p: Record<string, unknown>) {
   }
   const distance = loc.distance;
   const day = await dayForStaff(branchId, staffId, punch.work_date);
+  background(notifyPunch(branchId, person, status, punch, day));
 
   const [punches, messages, duties] = await Promise.all([
     todayPunches(branchId),
@@ -2502,6 +2503,7 @@ const NOTIFY_DEFAULTS = {
   admin_device: true,                      // admin: a new phone waits (device lock on)
   admin_late: true, absent_after_min: 15,  // admin: late, or not in this long after the shift start
   admin_leave: true,                       // admin: someone asked for leave
+  admin_punch: false,                      // admin: every clock in / clock out
   leave_result: true,                      // staff: leave approved / rejected
 };
 type NotifyCfg = typeof NOTIFY_DEFAULTS;
@@ -2518,6 +2520,43 @@ function notifyCfg(raw: unknown): NotifyCfg {
 async function branchNotify(branchId: string): Promise<NotifyCfg> {
   const { data, error } = await supabase.from("branches").select("notify").eq("id", branchId).maybeSingle();
   return notifyCfg(error ? {} : data?.notify);
+}
+
+// Run after the reply is sent (Supabase keeps the worker alive for it)
+function background(job: Promise<unknown>) {
+  const done = job.catch((e) => console.error("background", e));
+  try { (globalThis as unknown as { EdgeRuntime?: { waitUntil(p: Promise<unknown>): void } }).EdgeRuntime?.waitUntil(done); } catch { /* not on Supabase */ }
+}
+
+// admin: someone clocked in / out (option, off by default)
+async function notifyPunch(
+  branchId: string, person: { id: number; name: string; label?: string | null }, status: string, punch: Punch,
+  day: { late_min?: number; early_min?: number; worked_min?: number; ot_min?: number; shift?: { name?: string } | null } | null,
+) {
+  const cfg = await branchNotify(branchId);
+  if (!cfg.admin_punch) return;
+  const name = person.label || person.name;
+  const hm = (m: number) => m >= 60 ? `${Math.floor(m / 60)} ชม.${m % 60 ? ` ${m % 60} นาที` : ""}` : `${m} นาที`;
+  const extra: string[] = [];
+  let title: string, body: string;
+  if (status === "ok_out") {
+    const at = punch.check_out ? hhmm(Date.parse(punch.check_out)) : "";
+    if (day?.worked_min) extra.push(`ทำงาน ${hm(day.worked_min)}`);
+    if (day?.early_min) extra.push(`ออกก่อน ${hm(day.early_min)}`);
+    if (day?.ot_min) extra.push(`OT ${hm(day.ot_min)}`);
+    title = `⬛ ${name} ออกงาน ${at}`;
+    body = extra.join(" · ") || "ออกงานแล้ว";
+  } else {
+    const at = hhmm(Date.parse(punch.check_in));
+    const late = day?.late_min ?? 0;
+    if (day?.shift?.name) extra.push(`กะ ${day.shift.name}`);
+    extra.push(late > 0 ? `สาย ${hm(late)}` : "ตรงเวลา");
+    // this message already says late, so the cron "มาสาย" message is not sent again
+    if (late > 0) await onceKey(`late:${person.id}:${punch.work_date}`);
+    title = `✅ ${name} เข้างาน ${at}`;
+    body = extra.join(" · ");
+  }
+  await pushAdmins(branchId, { title, body, tag: `punch:${punch.id}:${status === "ok_out" ? "out" : "in"}` });
 }
 
 const fmtBahtTh = (n: number) => Number(n).toLocaleString("th-TH", { maximumFractionDigits: 2 });
@@ -3330,6 +3369,7 @@ async function handleAddLeave(p: Record<string, unknown>) {
 // POS ร้าน (repo checkkkkk) — แจ้งเตือนเข้าแอป POS บนมือถือ/iPad
 // ใช้กุญแจแจ้งเตือนเดียวกับตอกบัตร แต่เก็บรายชื่อเครื่องแยก (app_settings "pos_subs")
 // ไม่อ่าน/เขียนข้อมูลตอกบัตรเลย · เพิ่มต่อท้าย ไม่แก้ส่วนเดิม
+// (เจ้าของร้านเพิ่มเอง — เก็บไว้ในไฟล์นี้ด้วย อัปเดตฟังก์ชันครั้งต่อไปจะได้ไม่หาย)
 // ============================================================
 type PosSub = { endpoint: string; p256dh: string; auth: string; name: string; types: string[]; at: string };
 const POS_TYPES = ["order", "cooked", "served", "cancel", "move", "call", "paid", "shift", "test"];
