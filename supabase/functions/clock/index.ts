@@ -3326,6 +3326,71 @@ async function handleAddLeave(p: Record<string, unknown>) {
 // Dispatch
 // ============================================================
 
+// ============================================================
+// POS ร้าน (repo checkkkkk) — แจ้งเตือนเข้าแอป POS บนมือถือ/iPad
+// ใช้กุญแจแจ้งเตือนเดียวกับตอกบัตร แต่เก็บรายชื่อเครื่องแยก (app_settings "pos_subs")
+// ไม่อ่าน/เขียนข้อมูลตอกบัตรเลย · เพิ่มต่อท้าย ไม่แก้ส่วนเดิม
+// ============================================================
+type PosSub = { endpoint: string; p256dh: string; auth: string; name: string; types: string[]; at: string };
+const POS_TYPES = ["order", "cooked", "served", "cancel", "move", "call", "paid", "shift", "test"];
+const posText = (v: unknown, n: number) => String(v ?? "").replace(/[\u0000-\u001f\u007f]/g, " ").trim().slice(0, n);
+async function posSubs(): Promise<PosSub[]> {
+  const v = await getSetting<PosSub[]>("pos_subs", []);
+  return Array.isArray(v) ? v : [];
+}
+
+// เครื่องนี้รับแจ้งเตือน POS (เรียกซ้ำได้ เพื่อเปลี่ยนชื่อ/ชนิดที่รับ)
+async function handlePosSubscribe(p: Record<string, unknown>) {
+  const sub = cleanSub(p.sub);
+  if (!sub) return json({ ok: false, error: "bad_sub" });
+  const types = Array.isArray(p.types) ? (p.types as unknown[]).map(String).filter((t) => POS_TYPES.includes(t)) : POS_TYPES.slice();
+  if (!types.includes("test")) types.push("test");
+  const list = (await posSubs()).filter((x) => x.endpoint !== sub.endpoint);
+  if (list.length >= 60) return json({ ok: false, error: "too_many" });
+  list.push({ ...sub, name: posText(p.name, 40) || "POS", types, at: new Date().toISOString() });
+  if (/^https:\/\//.test(String(p._origin ?? "")) && !(await getSetting<string>("push_origin", ""))) await setSetting("push_origin", String(p._origin));
+  await setSetting("pos_subs", list);
+  return json({ ok: true, public_key: (await getVapid()).publicKey });
+}
+
+async function handlePosUnsubscribe(p: Record<string, unknown>) {
+  const ep = String(p.endpoint ?? ""), id = String(p.id ?? "");
+  await setSetting("pos_subs", (await posSubs()).filter((x) => x.endpoint !== ep && (!id || !x.endpoint.endsWith(id))));
+  return json({ ok: true });
+}
+
+async function handlePosSubs() {
+  return json({ ok: true, subs: (await posSubs()).map((x) => ({ id: x.endpoint.slice(-16), name: x.name, types: x.types, at: x.at })) });
+}
+
+// มีเหตุการณ์ใน POS → ส่งให้ทุกเครื่องที่เลือกรับชนิดนั้น (ยกเว้นเครื่องที่กดเอง) · event ซ้ำส่งครั้งเดียว
+async function handlePosPush(p: Record<string, unknown>) {
+  const type = String(p.type ?? "");
+  if (!POS_TYPES.includes(type)) return json({ ok: false, error: "bad_type" });
+  const title = posText(p.title, 60), body = posText(p.body, 300);
+  if (!body) return json({ ok: false, error: "empty" });
+  const ev = posText(p.event, 60);
+  if (ev && !(await onceKey("pos:" + ev))) return json({ ok: true, sent: 0, dup: true });
+  const self = String(p.self ?? ""), payload = JSON.stringify({ title: title || "POS", body, url: "./pos.html" });
+  const list = (await posSubs()).filter((x) => x.endpoint !== self && x.types.includes(type));
+  const dead: string[] = [];
+  let sent = 0;
+  await Promise.all(list.map(async (x) => {
+    try {
+      const r = await fetchWithTimeout(x.endpoint, {
+        method: "POST",
+        headers: { Authorization: await vapidHeader(x.endpoint), "Content-Encoding": "aes128gcm", "Content-Type": "application/octet-stream", TTL: "3600", Urgency: "high" },
+        body: await encryptPush(payload, x.p256dh, x.auth),
+      }, 8000);
+      if (r.status === 404 || r.status === 410) dead.push(x.endpoint);
+      else if (r.ok) sent++;
+      else console.error("pos push failed", r.status, await r.text().catch(() => ""));
+    } catch (e) { console.error("pos push error", e); }
+  }));
+  if (dead.length) await setSetting("pos_subs", (await posSubs()).filter((x) => !dead.includes(x.endpoint)));
+  return json({ ok: true, sent, of: list.length });
+}
+
 const ACTIONS: Record<string, (p: Record<string, unknown>) => Promise<Response>> = {
   bootstrap: handleBootstrap,
   today: handleToday,
@@ -3402,6 +3467,10 @@ const ACTIONS: Record<string, (p: Record<string, unknown>) => Promise<Response>>
   eval_month: handleEvalMonth,
   eval_save: handleEvalSave,
   kudos: handleKudos,
+  pos_subscribe: handlePosSubscribe,
+  pos_unsubscribe: handlePosUnsubscribe,
+  pos_subs: handlePosSubs,
+  pos_push: handlePosPush,
 };
 
 Deno.serve(async (req) => {
