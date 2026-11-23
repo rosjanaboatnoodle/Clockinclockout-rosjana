@@ -114,6 +114,14 @@
   .actBtn{ flex:1; border:none; border-radius:14px; padding:14px 6px; font-weight:900; font-size:14.5px; cursor:pointer; background:#eef2ff; color:#3730a3; }
   .actBtn:nth-child(2){ background:#fef3c7; color:#92400e; } .actBtn:nth-child(3){ background:#fce7f3; color:#9d174d; }
   .qrNeed{ background:#eef2ff; color:#3730a3; border-radius:12px; padding:14px; font-weight:900; text-align:center; font-size:15px; margin:8px 0; line-height:1.5; }
+  button.qrNeed{ display:block; width:100%; border:2px solid #6366f1; background:#4f46e5; color:#fff; font-size:16px; cursor:pointer; font-family:inherit; }
+  .qrScanMsg{ text-align:center; font-weight:800; font-size:14px; margin:4px 0 8px; }
+  .qrScan{ position:fixed; inset:0; background:#000; z-index:1000; display:flex; flex-direction:column; }
+  .qrScan video{ flex:1; width:100%; min-height:0; object-fit:cover; }
+  .qrScan .qrScanTop{ color:#fff; text-align:center; font-weight:900; padding:14px 16px; font-size:16px; line-height:1.4; }
+  .qrScan .qrFrame{ position:absolute; left:50%; top:50%; width:64vmin; height:64vmin; transform:translate(-50%,-50%); border:4px solid #fff; border-radius:18px; box-shadow:0 0 0 2000px rgba(0,0,0,.35); pointer-events:none; }
+  .qrScan .qrScanBtns{ display:flex; gap:8px; padding:12px 16px 20px; }
+  .qrScan .qrScanBtns button{ flex:1; border:none; border-radius:12px; padding:13px; font-weight:900; font-size:15px; font-family:inherit; }
   .pushRow .sendBtn{ width:100%; }
   .linkBtn{ border:none; background:#fff; color:#4338ca; font-weight:900; font-size:13px; border-radius:999px; padding:7px 12px; cursor:pointer; }
   .cardHead{ display:flex; justify-content:space-between; align-items:center; gap:8px; margin-bottom:6px; }
@@ -270,8 +278,10 @@
       <button class="photoBtn" id="photoBtn" onclick="document.getElementById('photoInput').click()" data-t="takePhoto">📷 ถ่ายรูปยืนยัน</button>
       <img class="photoPreview" id="photoPreview" alt="">
       <input id="photoInput" type="file" accept="image/*" capture="user" style="display:none;" onchange="onPhoto(this)">
+      <input id="qrPhotoInput" type="file" accept="image/*" capture="environment" style="display:none;" onchange="onQrPhoto(this)">
     </div>
-    <div class="qrNeed" id="qrNeed" style="display:none;"></div>
+    <button class="qrNeed" id="qrNeed" style="display:none;" onclick="openQrScan()"></button>
+    <div class="qrScanMsg" id="qrScanMsg" style="display:none;"></div>
     <div class="btnRow" id="punchRow">
       <button class="btn btnIn" id="btnIn" onclick="punch('in')" data-t="clockIn">✅ เข้างาน</button>
       <button class="btn btnOut" id="btnOut" onclick="punch('out')" data-t="clockOut">⬛ ออกงาน</button>
@@ -313,7 +323,7 @@
   </div>
 </div>
 
-<script src="ui-text.js?v=20261123-1"></script><!-- แก้ ui-text.js แล้วเปลี่ยนเลข v ด้วย เครื่องเด็กจะได้โหลดไฟล์ใหม่ -->
+<script src="ui-text.js?v=20261123-2"></script><!-- แก้ ui-text.js แล้วเปลี่ยนเลข v ด้วย เครื่องเด็กจะได้โหลดไฟล์ใหม่ -->
 <script>
   // ข้อมูลอยู่ใน Supabase (Edge Function "clock") ดูวิธีตั้งค่าใน README.md
   // ใส่ค่าจาก Supabase Dashboard -> Project Settings -> API:
@@ -965,15 +975,110 @@
       return s && Date.now() - s.at < SCAN_MINUTES * 60000 ? s.q : "";
     } catch(e){ return ""; }
   }
-  function clearScan(){ ssSet("clock_scan", ""); updateQrGate(); }
+  function clearScan(){ ssSet("clock_scan", ""); qrMsg(""); updateQrGate(); }
+
+  // ---------- สแกน QR ในหน้านี้ (ไม่ต้องออกไปเปิดกล้องเอง) ----------
+  // กล้องสด (ถ้าเปิดได้) → อ่าน QR เอง · เปิดกล้องสดไม่ได้ (เช่นในแอปแชท) → ถ่ายรูป QR แทน
+  let qrStream = null, qrTimer = null, qrDetector = null, qrBusy = false;
+  function qrMsg(text, ok){
+    const m = document.getElementById("qrScanMsg");
+    m.textContent = text || ""; m.style.display = text ? "" : "none";
+    m.style.color = ok ? "#047857" : "#b91c1c"; m.dataset.ok = ok ? "1" : "";
+  }
+  function loadJsQr(){
+    if (window.jsQR) return Promise.resolve();
+    return new Promise((ok, bad) => { const s = document.createElement("script"); s.src = "jsqr.js?v=1"; s.onload = ok; s.onerror = bad; document.head.appendChild(s); });
+  }
+  async function openQrScan(){
+    qrMsg("");
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){ document.getElementById("qrPhotoInput").click(); return; }
+    const box = el("div", "qrScan"); box.id = "qrScanBox";
+    box.appendChild(el("div", "qrScanTop", t("qrScanTitle")));
+    const v = document.createElement("video"); v.setAttribute("playsinline", ""); v.muted = true; box.appendChild(v);
+    box.appendChild(el("div", "qrFrame"));
+    const row = el("div", "qrScanBtns");
+    const ph = el("button", "", t("qrScanPhoto")); ph.style.background = "#fff"; ph.onclick = () => { closeQrScan(); document.getElementById("qrPhotoInput").click(); };
+    const cl = el("button", "", t("qrScanClose")); cl.style.background = "#334155"; cl.style.color = "#fff"; cl.onclick = closeQrScan;
+    row.appendChild(ph); row.appendChild(cl); box.appendChild(row);
+    document.body.appendChild(box);
+    try{
+      qrStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" }, audio: false });
+      if (!document.getElementById("qrScanBox")){ closeQrScan(); return; }
+      v.srcObject = qrStream; await v.play();
+    } catch(e){
+      box.querySelector(".qrScanTop").textContent = t("qrScanNoCam"); // ปุ่ม "ถ่ายรูป QR แทน" ยังกดได้
+      return;
+    }
+    try{ if ("BarcodeDetector" in window && (await BarcodeDetector.getSupportedFormats()).includes("qr_code")) qrDetector = new BarcodeDetector({ formats: ["qr_code"] }); } catch(e){ qrDetector = null; }
+    if (!qrDetector) loadJsQr().catch(() => {});
+    const cv = document.createElement("canvas"), cx = cv.getContext("2d", { willReadFrequently: true });
+    qrTimer = setInterval(async () => {
+      if (qrBusy || !v.videoWidth) return;
+      qrBusy = true;
+      try{
+        let text = "";
+        if (qrDetector){ const r = await qrDetector.detect(v); text = r && r[0] ? r[0].rawValue : ""; }
+        else if (window.jsQR){
+          const k = Math.min(1, 640 / Math.max(v.videoWidth, v.videoHeight));
+          cv.width = Math.round(v.videoWidth * k); cv.height = Math.round(v.videoHeight * k);
+          cx.drawImage(v, 0, 0, cv.width, cv.height);
+          const r = jsQR(cx.getImageData(0, 0, cv.width, cv.height).data, cv.width, cv.height, { inversionAttempts: "dontInvert" });
+          text = r ? r.data : "";
+        }
+        if (text){ closeQrScan(); await useQrText(text); }
+      } catch(e){}
+      qrBusy = false;
+    }, 250);
+  }
+  function closeQrScan(){
+    if (qrTimer){ clearInterval(qrTimer); qrTimer = null; }
+    if (qrStream){ qrStream.getTracks().forEach(tr => tr.stop()); qrStream = null; }
+    const b = document.getElementById("qrScanBox"); if (b) b.remove();
+    qrBusy = false;
+  }
+  async function onQrPhoto(input){
+    const f = input.files && input.files[0]; input.value = "";
+    if (!f) return;
+    qrMsg(t("qrScanChecking"), true);
+    try{
+      await loadJsQr();
+      const img = await new Promise((ok, bad) => { const i = new Image(); i.onload = () => ok(i); i.onerror = bad; i.src = URL.createObjectURL(f); });
+      let text = "";
+      for (const size of [1000, 1600, 600]){ // ลองหลายขนาด รูปจากกล้องใหญ่มาก
+        const k = Math.min(1, size / Math.max(img.width, img.height)), cv = document.createElement("canvas");
+        cv.width = Math.round(img.width * k); cv.height = Math.round(img.height * k);
+        const cx = cv.getContext("2d"); cx.drawImage(img, 0, 0, cv.width, cv.height);
+        const r = jsQR(cx.getImageData(0, 0, cv.width, cv.height).data, cv.width, cv.height);
+        if (r && r.data){ text = r.data; break; }
+      }
+      URL.revokeObjectURL(img.src);
+      if (!text){ qrMsg(t("qrScanNone")); return; }
+      await useQrText(text);
+    } catch(e){ qrMsg(t("qrScanNone")); }
+  }
+  async function useQrText(text){
+    if (/^WIFI:/i.test(text)){ qrMsg(t("qrScanWifi")); return; }
+    let q = "", b = "";
+    try{ const u = new URL(text, location.href); q = u.searchParams.get("q") || ""; b = (u.searchParams.get("b") || "").toLowerCase(); } catch(e){}
+    if (!/^[a-f0-9]{16,64}$/i.test(q) || (b && KEY && b !== KEY)){ qrMsg(t("qrScanOther")); return; }
+    qrMsg(t("qrScanChecking"), true);
+    ssSet("clock_scan", JSON.stringify({ q: q.toLowerCase(), at: Date.now() }));
+    const j = await api({ action: "bootstrap", lang, key: KEY, qr: q.toLowerCase() });
+    if (j && j.ok !== false && j.qr_ok === false){ ssSet("clock_scan", ""); qrMsg(t("qrOld")); }
+    else if (j && j.qr_required && j.qr_here === false){ ssSet("clock_scan", ""); qrMsg(t("ipNotAllowed")); }
+    else qrMsg(t("qrScanOk", { m: SCAN_MINUTES }), true);
+    updateQrGate();
+  }
   function updateQrGate(){
     const need = QR_REQUIRED && !scanCode();
     document.getElementById("qrNeed").style.display = need ? "" : "none";
-    document.getElementById("qrNeed").textContent = t("qrNeed");
+    document.getElementById("qrNeed").textContent = t("qrTap");
+    if (!need && document.getElementById("qrScanMsg").dataset.ok !== "1") qrMsg("");
     document.getElementById("punchRow").style.display = need ? "none" : "";
     const hint = document.getElementById("qrHint");
     hint.style.display = QR_REQUIRED ? "" : "none";
-    hint.textContent = need ? t("qrNeed") : t("qrReady", { m: SCAN_MINUTES });
+    hint.textContent = need ? t("qrTap") : t("qrReady", { m: SCAN_MINUTES });
+    hint.style.cursor = need ? "pointer" : ""; hint.onclick = need ? openQrScan : null;
   }
 
   // ---------- แจ้งเตือน (เปิดบนมือถือของตัวเองเท่านั้น ไม่ใช่เครื่องกลางร้าน) ----------
