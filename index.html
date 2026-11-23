@@ -181,6 +181,14 @@
     </div>
     <div class="branchName" id="branchName"></div>
     <div class="banner warn" id="banner" style="display:none;"></div>
+    <!-- เปิดจาก Messenger / Facebook / IG: เบราว์เซอร์ในแอปพวกนี้ไม่ให้ตำแหน่ง พาไปเปิดใน Chrome / Safari -->
+    <div class="banner warn" id="iabBox" style="display:none;">
+      <div style="font-weight:900;" data-t="iabTitle">⚠️ เปิดจากแอปแชท หาตำแหน่งไม่ได้</div>
+      <div id="iabText" style="margin-top:4px;"></div>
+      <button id="iabOpen" onclick="openOutside()" data-t="iabOpenChrome" style="display:none; margin-top:8px; width:100%; border:none; border-radius:10px; padding:11px; font-weight:900; background:#0f172a; color:#fff; font-size:14px;">เปิดใน Chrome</button>
+      <button onclick="copyEntry()" data-t="iabCopy" style="margin-top:8px; width:100%; border:2px solid #c7d2fe; border-radius:10px; padding:10px; font-weight:900; background:#fff; color:#0f172a; font-size:14px;">คัดลอกลิงก์ไปวางใน Safari / Chrome</button>
+      <div id="iabStatus" style="margin-top:4px; font-weight:800;"></div>
+    </div>
     <!-- ไม่มีรหัสสาขา (เช่น เปิดจากไอคอนที่เพิ่มไว้ก่อนแก้) วางลิงก์จากแอดมินได้เลย -->
     <div class="banner" id="linkBox" style="display:none;">
       <input id="linkInput" data-tp="pasteLinkPh" placeholder="วางลิงก์ตอกบัตรที่ได้จากแอดมิน" style="width:100%; padding:10px; border-radius:10px; border:2px solid #c7d2fe; font-size:14px; box-sizing:border-box;">
@@ -305,7 +313,7 @@
   </div>
 </div>
 
-<script src="ui-text.js?v=20261121-6"></script><!-- แก้ ui-text.js แล้วเปลี่ยนเลข v ด้วย เครื่องเด็กจะได้โหลดไฟล์ใหม่ -->
+<script src="ui-text.js?v=20261123-1"></script><!-- แก้ ui-text.js แล้วเปลี่ยนเลข v ด้วย เครื่องเด็กจะได้โหลดไฟล์ใหม่ -->
 <script>
   // ข้อมูลอยู่ใน Supabase (Edge Function "clock") ดูวิธีตั้งค่าใน README.md
   // ใส่ค่าจาก Supabase Dashboard -> Project Settings -> API:
@@ -511,6 +519,7 @@
     document.documentElement.lang = lang;
     document.querySelectorAll("[data-t]").forEach(e => { e.textContent = t(e.dataset.t); });
     document.querySelectorAll("[data-tp]").forEach(e => { e.placeholder = t(e.dataset.tp); });
+    if (IAB && document.getElementById("iabBox").style.display !== "none") showIab();
     document.getElementById("langSelect").value = lang;
     tick();
     if (PROJECT_REF.startsWith("YOUR_") || SUPABASE_KEY.startsWith("YOUR_")){
@@ -751,7 +760,9 @@
       fix = { lat: c.latitude, lng: c.longitude, accuracy: c.accuracy, at: Date.now() };
       showGps(b);
     }, err => {
-      setGps(err.code === 1 ? t("gpsDenied") : t("gpsUnavailable"), "bad");
+      if (IAB) { setGps(t("gpsInApp"), "bad"); iabButton(document.getElementById("gpsStatus")); showIab(); }
+      else if (err.code === 3 && !fix) setGps(t("gpsSlow"), "bad"); // หาไม่ทัน 20 วิ แต่ยังหาต่ออยู่
+      else if (err.code !== 3) setGps(err.code === 1 ? t("gpsDenied") : t("gpsUnavailable"), "bad");
     }, { enableHighAccuracy: true, maximumAge: 0, timeout: 20000 });
   }
 
@@ -1353,7 +1364,41 @@
   setInterval(() => { if (!document.hidden) loadToday(); }, 120000);
   setInterval(tick, 1000);
 
+  // ---------- เปิดจากแอปแชท (in-app browser) ----------
+  const UA = navigator.userAgent || "";
+  const IAB = /FBAN|FBAV|FB_IAB|FBIOS|FB4A|Messenger|Instagram|\bLine\//i.test(UA);
+  const IS_IOS = /iPhone|iPad|iPod/i.test(UA) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+  const ENTRY_URL = location.href; // ลิงก์ตอนเปิด (มีรหัส QR ด้วย) ใช้เปิดต่อในเบราว์เซอร์จริง
+  function showIab(){
+    if (!IAB) return;
+    document.getElementById("iabText").textContent = t(IS_IOS ? "iabIos" : "iabAndroid");
+    document.getElementById("iabOpen").style.display = IS_IOS ? "none" : "";
+    document.getElementById("iabBox").style.display = "";
+  }
+  // ปุ่มในหน้าต่าง PIN (กล่องด้านบนถูกหน้าต่างบังอยู่)
+  function iabButton(box){
+    const btn = el("button", "", t(IS_IOS ? "iabCopy" : "iabOpenChrome"));
+    btn.style.cssText = "display:block; margin-top:8px; width:100%; border:none; border-radius:10px; padding:10px; font-weight:900; background:#0f172a; color:#fff; font-size:14px;";
+    btn.onclick = IS_IOS ? copyEntry : openOutside;
+    box.appendChild(btn);
+  }
+  function openOutside(){
+    const u = new URL(ENTRY_URL);
+    location.href = "intent://" + u.host + u.pathname + u.search + "#Intent;scheme=" + u.protocol.replace(":", "")
+      + ";package=com.android.chrome;S.browser_fallback_url=" + encodeURIComponent(ENTRY_URL) + ";end";
+  }
+  async function copyEntry(){
+    const st = document.getElementById("iabStatus");
+    try { await navigator.clipboard.writeText(ENTRY_URL); st.textContent = t("iabCopied"); alert(t("iabCopied")); }
+    catch(e){ prompt(t("iabCopyManual"), ENTRY_URL); }
+  }
+
   (async function init(){
+    // LINE: เติม openExternalBrowser=1 แล้ว LINE จะเปิดใน Safari / Chrome ให้เอง
+    if (/\bLine\//i.test(UA) && !/[?&]openExternalBrowser=1/.test(location.search)){
+      const u = new URL(location.href); u.searchParams.set("openExternalBrowser", "1"); location.replace(u.toString()); return;
+    }
+    showIab();
     const fromUrl = new URLSearchParams(location.search).get("b");
     const goodUrlKey = fromUrl && /^[a-f0-9]{8,64}$/i.test(fromUrl)
       && !(fromUrl.toLowerCase() === lsGet("clock_bad_key") && lsGet("clock_key"));
