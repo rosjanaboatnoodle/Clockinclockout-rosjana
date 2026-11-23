@@ -760,7 +760,12 @@
       fix = { lat: c.latitude, lng: c.longitude, accuracy: c.accuracy, at: Date.now() };
       showGps(b);
     }, err => {
-      if (IAB) { setGps(t("gpsInApp"), "bad"); iabButton(document.getElementById("gpsStatus")); showIab(); }
+      // เปิดในแอปแชท (บางเครื่องหาได้ บางเครื่องไม่ได้) → หาไม่ได้จริงค่อยพาไปเบราว์เซอร์
+      if (IAB && !(err.code === 3 && fix)) {
+        setGps(t("gpsInApp"), "bad"); iabButton(document.getElementById("gpsStatus")); showIab();
+        // Android: ลองเปิด Chrome ให้เองครั้งเดียว (ถ้าไม่ได้ ยังมีปุ่ม) · ครั้งเดียวต่อแท็บ กันวนถ้าไม่มี Chrome
+        if (!IS_IOS && !ssGet("iab_tried")){ ssSet("iab_tried", "1"); try { openOutside(); } catch(e){} }
+      }
       else if (err.code === 3 && !fix) setGps(t("gpsSlow"), "bad"); // หาไม่ทัน 20 วิ แต่ยังหาต่ออยู่
       else if (err.code !== 3) setGps(err.code === 1 ? t("gpsDenied") : t("gpsUnavailable"), "bad");
     }, { enableHighAccuracy: true, maximumAge: 0, timeout: 20000 });
@@ -1398,9 +1403,6 @@
     if (/\bLine\//i.test(UA) && !/[?&]openExternalBrowser=1/.test(location.search)){
       const u = new URL(location.href); u.searchParams.set("openExternalBrowser", "1"); location.replace(u.toString()); return;
     }
-    showIab();
-    // Android ในแอปแชท: ลองเปิด Chrome ให้เองครั้งเดียว (ถ้าไม่ได้ ยังมีปุ่มให้กด) · ครั้งเดียวต่อแท็บ กันวนถ้าเครื่องไม่มี Chrome
-    if (IAB && !IS_IOS && !ssGet("iab_tried")){ ssSet("iab_tried", "1"); try { openOutside(); } catch(e){} }
     const fromUrl = new URLSearchParams(location.search).get("b");
     const goodUrlKey = fromUrl && /^[a-f0-9]{8,64}$/i.test(fromUrl)
       && !(fromUrl.toLowerCase() === lsGet("clock_bad_key") && lsGet("clock_key"));
