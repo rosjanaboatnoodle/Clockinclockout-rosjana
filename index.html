@@ -1399,6 +1399,8 @@
       const u = new URL(location.href); u.searchParams.set("openExternalBrowser", "1"); location.replace(u.toString()); return;
     }
     showIab();
+    // Android ในแอปแชท: ลองเปิด Chrome ให้เองครั้งเดียว (ถ้าไม่ได้ ยังมีปุ่มให้กด) · ครั้งเดียวต่อแท็บ กันวนถ้าเครื่องไม่มี Chrome
+    if (IAB && !IS_IOS && !ssGet("iab_tried")){ ssSet("iab_tried", "1"); try { openOutside(); } catch(e){} }
     const fromUrl = new URLSearchParams(location.search).get("b");
     const goodUrlKey = fromUrl && /^[a-f0-9]{8,64}$/i.test(fromUrl)
       && !(fromUrl.toLowerCase() === lsGet("clock_bad_key") && lsGet("clock_key"));
