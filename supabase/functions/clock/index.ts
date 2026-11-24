@@ -3427,6 +3427,46 @@ async function handlePosWages(p: Record<string, unknown>) {
   return json({ ok: true, closures, advances });
 }
 
+// แปลหมายเหตุของลูกค้า/พนักงานร้าน POS ด้วย Gemini (แปลเข้าบริบทร้านก๋วยเตี๋ยว)
+// และ "เสนอ" ว่าความหมายเหมือนคำที่ร้านจำไว้คำไหน — เจ้าของร้านเป็นคนกดยืนยันเองเสมอ
+const POS_AI_DAY_MAX = 400;
+const POS_LANGS = ["th", "en", "my", "lo", "zh", "km", "vi", "ja", "ko"];
+async function handlePosNoteTr(p: Record<string, unknown>) {
+  { const g = await posGate(p); if (g) return g; }
+  const clean = (v: unknown, n: number) => String(v ?? "").replace(/[\u0000-\u001f]/g, " ").trim().slice(0, n);
+  const texts = [...new Set((Array.isArray(p.texts) ? p.texts : []).map((t) => clean(t, 100)).filter(Boolean))].slice(0, 10);
+  const langs = [...new Set((Array.isArray(p.langs) ? p.langs : []).map((l) => String(l)).filter((l) => POS_LANGS.includes(l)))];
+  const known = [...new Set((Array.isArray(p.known) ? p.known : []).map((t) => clean(t, 100)).filter(Boolean))].slice(0, 150);
+  if (!texts.length || !langs.length) return json({ ok: false, error: "bad_request" });
+  // กันใช้เกินโควตา: นับรายวัน (เวลาร้าน)
+  const day = localDate(new Date());
+  const used = await getSetting<{ d: string; n: number } | null>("pos_ai_day", null);
+  const n = used && used.d === day ? used.n : 0;
+  if (n + texts.length > POS_AI_DAY_MAX) return json({ ok: false, error: "daily_limit" });
+  await setSetting("pos_ai_day", { d: day, n: n + texts.length });
+  const names: Record<string, string> = { th: "Thai", en: "English", my: "Burmese (Myanmar script)", lo: "Lao", zh: "Simplified Chinese", km: "Khmer", vi: "Vietnamese", ja: "Japanese", ko: "Korean" };
+  const prompt = `You help the kitchen of a Thai boat-noodle restaurant. Customers and staff write short notes on food orders (e.g. no bean sprouts, less spicy, extra noodles, takeaway, no MSG).
+For EACH note below:
+1. Translate it into these languages: ${langs.map((l) => `${l} = ${names[l]}`).join(", ")}. Keep it short, kitchen-style, the exact meaning (never soften or change amounts, never drop "no"/"not"). Keep menu words like noodle types as kitchen staff would say them.
+2. "like": if one phrase in the KNOWN list has EXACTLY the same meaning for the kitchen (only wording differs), return that known phrase exactly as written; otherwise "". Different strength or different ingredient is NOT the same (e.g. "ไม่เผ็ด" vs "เผ็ดน้อย", "ไม่ใส่ถั่ว" vs "ไม่ใส่ถั่วงอก"). When unsure return "".
+Return ONLY JSON: {"items":[{"text":"<note exactly as given>","tr":{${langs.map((l) => `"${l}":"..."`).join(",")}},"like":""}]}
+
+NOTES: ${JSON.stringify(texts)}
+KNOWN: ${JSON.stringify(known)}`;
+  try {
+    const r = await callGeminiJson(prompt) as { items?: Array<{ text?: unknown; tr?: Record<string, unknown>; like?: unknown }> };
+    const items = (r?.items ?? []).filter((it) => texts.includes(String(it?.text ?? "").trim())).map((it) => {
+      const tr: Record<string, string> = {};
+      for (const l of langs) { const v = clean(it?.tr?.[l], 200); if (v) tr[l] = v; }
+      const like = clean(it?.like, 100);
+      return { text: String(it.text).trim(), tr, like: known.includes(like) && like !== String(it.text).trim() ? like : "" };
+    });
+    return json({ ok: true, items });
+  } catch (e) {
+    return json({ ok: false, error: e instanceof Error ? e.message : String(e) });
+  }
+}
+
 async function posSubs(): Promise<PosSub[]> {
   const v = await getSetting<PosSub[]>("pos_subs", []);
   return Array.isArray(v) ? v : [];
@@ -3571,6 +3611,7 @@ const ACTIONS: Record<string, (p: Record<string, unknown>) => Promise<Response>>
   pos_key_set: handlePosKeySet,
   pos_key_status: handlePosKeyStatus,
   pos_wages: handlePosWages,
+  pos_note_tr: handlePosNoteTr,
 };
 
 Deno.serve(async (req) => {
