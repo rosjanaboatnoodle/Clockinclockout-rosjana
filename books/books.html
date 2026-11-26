@@ -247,10 +247,10 @@ function vStock() {
   if (!STK) { loadStock(); return '<p class="mu c" style="padding:30px">กำลังโหลด…</p>'; }
   const {rv, up} = STK, cat = rv.catalog || [], unitOf = n => (cat.find(c => c.name === n) || {}).unit || '';
   const many = (rv.branches || []).length > 1;
-  const review = (rv.rows || []).map(r => `<div class="ex rv" id="sk${r.id}"><div class="n"><b>${esc(r.item)}</b> <small class="mu">${r.qty ? fq(r.qty) + ' ' + esc(r.unit || '') : ''}${r.pack ? ' (ละ ' + fq(r.pack) + ')' : ''} · ${baht2(r.amount)} · ${dTh(r.date)}</small><br><small class="neg">${SWHY[r.stock_note] || 'รอตรวจ'}</small></div>
+  const review = (rv.rows || []).map(r => `<div class="ex rv" id="sk${r.id}"><div class="n"><b>${esc(r.item)}</b> <small class="mu">${r.qty ? fq(r.qty) + ' ' + esc(r.unit || '') : ''}${r.pack ? ' (ละ ' + fq(r.pack) + ')' : ''} · ${baht2(r.amount)} · ${dTh(r.date)}</small><br><small class="neg" id="skm${r.id}">${SWHY[r.stock_note] || 'รอตรวจ'}${r.stock_note === 'pack' || r.stock_note === 'unit' ? ` — ใส่ช่อง "1 ${esc(r.unit || 'หน่วย')} = ? ${esc(r.stock_unit || unitOf(r.stock_item) || '')}" (ถ้าเป็นหน่วยเดียวกันใส่ 1)` : r.stock_note === 'qty' ? ' — ใส่จำนวน' : r.stock_note === 'item' ? ' — เลือกของในสต็อก (ไม่มีในสต็อก กด "ไม่ใช่ของสต็อก")' : ''}</small></div>
     <div class="ctl" style="margin-top:4px"><input list="skCat" id="ski${r.id}" placeholder="ของในสต็อก" value="${esc(r.stock_item || '')}" style="flex:2;min-width:150px" oninput="$('#sku${r.id}').textContent=unitOf2(this.value)">
-    <input id="skq${r.id}" type="number" inputmode="decimal" placeholder="จำนวน" value="${r.qty ?? ''}" style="flex:1;min-width:70px"><input id="skn${r.id}" placeholder="หน่วยที่ซื้อ" value="${esc(r.unit || '')}" style="flex:1;min-width:70px">
-    <input id="skp${r.id}" type="number" inputmode="numeric" placeholder="ต่อแพ็ค" value="${r.pack ?? ''}" style="flex:1;min-width:80px"><small class="mu" id="sku${r.id}" style="align-self:center">${esc(r.stock_unit || unitOf(r.stock_item))}</small>
+    <input id="skq${r.id}" type="number" inputmode="decimal" placeholder="จำนวน" value="${r.qty ?? ''}" style="flex:1;min-width:70px"><input id="skn${r.id}" placeholder="หน่วยที่ซื้อ" value="${esc(r.unit || '')}" style="flex:1;min-width:70px" oninput="$('#skbu${r.id}').textContent=this.value||'หน่วยที่ซื้อ'">
+    <span class="nb sm" style="align-self:center;white-space:nowrap">1 <b id="skbu${r.id}">${esc(r.unit || 'หน่วยที่ซื้อ')}</b> =</span><input id="skp${r.id}" type="number" inputmode="decimal" placeholder="?" value="${r.pack ?? ''}" style="flex:0 1 80px;min-width:60px"><small class="b" id="sku${r.id}" style="align-self:center">${esc(r.stock_unit || unitOf(r.stock_item) || 'หน่วยสต็อก')}</small>
     ${many ? `<select id="skb${r.id}" style="flex:1;min-width:110px">${rv.branches.map(b => `<option value="${esc(b.id)}"${(r.branch_id || rv.default_branch) === b.id ? ' selected' : ''}>${esc(b.name)}</option>`).join('')}</select>` : ''}
     <button class="g sm" onclick="stockFix(${r.id})">บันทึก</button><button class="sm" onclick="stockSkip(${r.id})">ไม่ใช่ของสต็อก</button></div></div>`).join('');
   const prices = (up.items || []).map((it, i) => { const ch = it.change; return `<tr onclick="STK.open=STK.open===${i}?null:${i};draw()" style="cursor:pointer"><td><b>${esc(it.name)}</b><br><small class="mu">${esc(it.last.buy)} · ${dTh(it.last.date)}</small></td><td class="r b">${baht2(it.last.price)}<small class="mu">/${esc(it.unit)}</small></td><td class="r">${ch == null ? '<span class="mu">—</span>' : `<b class="${ch > 0 ? 'neg' : ch < 0 ? 'pos' : ''}">${ch > 0 ? '▲' : ch < 0 ? '▼' : ''} ${Math.abs(ch).toFixed(1)}%</b>`}</td><td class="r">${baht2(it.avg)}<br><small class="mu">${baht2(it.min)}–${baht2(it.max)}</small></td><td class="r">${it.n}<br><small class="mu">${baht(it.spent)}</small></td></tr>
@@ -266,10 +266,13 @@ function unitOf2(n) { const c = ((STK && STK.rv.catalog) || []).find(x => x.name
 async function stockFix(id) {
   const g = k => $('#sk' + k + id), p = {id, item_name: g('i').value.trim(), qty: g('q').value, unit: g('n').value.trim(), pack: g('p').value};
   if (g('b')) p.branch_id = g('b').value;
-  if (!p.item_name) return toast('เลือกของในสต็อกก่อน');
+  const msg = t => { const m = $('#skm' + id); if (m) { m.textContent = t; m.scrollIntoView({block: 'center', behavior: 'smooth'}); } toast(t); };
+  if (!p.item_name) return msg('⚠️ เลือกของในสต็อกก่อน (ถ้าไม่มีในสต็อก กด "ไม่ใช่ของสต็อก")');
+  if (!(+p.qty > 0)) return msg('⚠️ ใส่จำนวนที่ซื้อ');
   const r = await api('stock_fix', p);
-  if (!r.ok) return toast(r.error === 'unknown_stock_item' ? 'ไม่มีชื่อนี้ในระบบสต็อก เลือกจากรายการ' : 'บันทึกไม่ได้: ' + r.error);
-  toast(r.row && r.row.stock_status === 'ok' ? `เข้าสต็อกแล้ว ${fq(r.row.stock_qty)} ${r.row.stock_unit || ''}${r.also ? ` · อีก ${r.also} รายการเข้าตามด้วย` : ''}` : 'บันทึกแล้ว แต่ยังขาดข้อมูล: ' + (SWHY[r.row && r.row.stock_note] || ''));
+  if (!r.ok) return msg(r.error === 'unknown_stock_item' ? '⚠️ ไม่มีชื่อนี้ในระบบสต็อก เลือกจากรายการที่ขึ้นตอนพิมพ์' : '⚠️ บันทึกไม่ได้: ' + r.error);
+  if (!r.row || r.row.stock_status !== 'ok') { const n = r.row && r.row.stock_note, su = (r.row && r.row.stock_unit) || unitOf2(p.item_name); return msg(n === 'pack' || n === 'unit' ? `⚠️ ยังเข้าไม่ได้: ${p.unit || 'หน่วยที่ซื้อ'} กับ ${su} ไม่ตรงกัน — ใส่ช่อง "1 ${p.unit || 'หน่วย'} = ? ${su}" (หน่วยเดียวกันใส่ 1)` : '⚠️ ยังเข้าไม่ได้: ' + (SWHY[n] || '')); }
+  toast(`✅ เข้าสต็อกแล้ว ${fq(r.row.stock_qty)} ${r.row.stock_unit || ''}${r.also ? ` · อีก ${r.also} รายการเข้าตามด้วย` : ''}`);
   STK = null; draw(); api('range', {from: S.cyc.start, to: S.cyc.end}).then(d => { S.d = d; });
 }
 async function stockSkip(id) { await api('stock_fix', {id, skip: true}); toast('ข้ามแล้ว ไม่เข้าสต็อก'); STK = null; draw(); }
