@@ -837,7 +837,7 @@
   const ERROR_KEYS = {
     wrong_pin: "wrongPin", pin_invalid: "pinInvalid", no_pin: "noPin", already_in: "alreadyIn", not_in: "notIn",
     gps_required: "gpsRequired", photo_required: "photoRequired", bad_photo: "photoFail", photo_too_large: "photoFail",
-    too_many_tries: "tooManyTries", bad_link: "badLink", ip_not_allowed: "ipNotAllowed",
+    too_many_tries: "tooManyTries", bad_link: "badLink", ip_not_allowed: "ipNotAllowed", ip_need_gps: "ipNeedGps", ip_gps_far: "ipGpsFar",
     device_pending: "devicePendingTitle", device_blocked: "deviceBlockedTitle",
     scan_qr: "qrNeed",
     need_login: "loginTitle", not_you: "notYou", name_not_found: "nameNotFound", name_ambiguous: "nameAmbiguous",
@@ -862,7 +862,7 @@
     if (!IS_KIOSK && b.require_gps && b.lat !== null && b.lat !== undefined){
       if (!fix){ setResult(t("gpsFinding"), "err"); return; }
       Object.assign(extra, { lat: fix.lat, lng: fix.lng, accuracy: fix.accuracy });
-    }
+    } else if (!IS_KIOSK && b.ip_gps && fix) Object.assign(extra, { lat: fix.lat, lng: fix.lng, accuracy: fix.accuracy }); // สำรองเมื่อเน็ตร้านเปลี่ยนเลข
     if (b.require_photo){
       if (!photoData){ setResult(t("photoRequired"), "err"); return; }
       extra.photo = photoData;
@@ -877,6 +877,8 @@
     document.getElementById("btnOut").disabled = false;
     if (!j || !j.ok){
       if (j && j.error === "scan_qr") clearScan();
+      // เน็ตร้านเปลี่ยนเลข: เริ่มหาตำแหน่งเฉพาะตอนนี้ (ปกติไม่ขอ GPS) แล้วให้กดตอกอีกครั้ง
+      if (j && j.error === "ip_need_gps" && gpsWatch === null){ document.getElementById("gpsStatus").style.display = ""; startGps(b); }
       setResult(errorText(j), "err");
       if (j && j.error === "wrong_pin") document.getElementById("pinInput").select();
       return;
