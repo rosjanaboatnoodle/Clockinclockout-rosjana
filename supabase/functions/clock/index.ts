@@ -603,7 +603,7 @@ async function handleBootstrap(p: Record<string, unknown>) {
       });
     }
     if (v && typeof v !== "string") { me = v.staffId; kiosk = v.kiosk; }
-    if (b) { qrRequired = !!b.qr_required && !kiosk; qrScanned = qrOk(b, p); qrHere = qrScanned && (!b.require_ip || ipAllowed(b, p)); }
+    if (b) { qrRequired = !!b.qr_required && !kiosk; qrScanned = qrOk(b, p); qrHere = qrScanned && (!b.require_ip || ipAllowed(b, p) || await ipGpsOn(b.id)); } // เปิด GPS สำรองไว้: ตอนกดตอกจะเช็กตำแหน่งแทน
   }
   const cols = "id, name, sort, lat, lng, radius_m, require_gps, require_photo" + (admin ? ", access_key, photo_keep_days" : "");
   let bq = supabase.from("branches").select(cols);
