@@ -265,10 +265,23 @@ function ipAllowed(b: KeyBranch, p: Record<string, unknown>): boolean {
   return !!tag && (b.allowed_ips ?? []).includes(tag);
 }
 
+// สำรองเมื่อเน็ตร้านเปลี่ยนเลข: ถ้าแอดมินเปิด "ใช้ GPS แทน" และมือถืออยู่ในรัศมีร้าน ให้ผ่าน (เครื่องกลางร้านไม่ต้อง)
+const IP_GPS_KEY = "ip_gps_fallback";
+async function ipGpsOn(id: string): Promise<boolean> { return !!(await getSetting<Record<string, boolean>>(IP_GPS_KEY, {}))[id]; }
+
 async function ipError(b: KeyBranch, p: Record<string, unknown>, staffName: string): Promise<string | null> {
   if (!b.require_ip) return null;
   const tag = ipTag(String(p._ip ?? ""));
   if (tag && (b.allowed_ips ?? []).includes(tag)) return null;
+  if (await ipGpsOn(b.id)) {
+    const { data: g } = await supabase.from("branches").select("id, lat, lng, radius_m").eq("id", b.id).maybeSingle();
+    if (g && g.lat !== null && g.lng !== null) {
+      const loc = checkLocation({ ...(g as BranchGeo), require_gps: true, require_photo: false }, p);
+      if (loc.ok) { await logAdmin("ip_gps_ok", { branch: b.id, ip: tag, staff: staffName, distance: loc.distance }); return null; }
+      await logAdmin("ip_reject", { branch: b.id, ip: tag, staff: staffName, gps: loc.error });
+      return loc.error === "gps_required" ? "ip_need_gps" : "ip_gps_far";
+    }
+  }
   await logAdmin("ip_reject", { branch: b.id, ip: tag, staff: staffName });
   return "ip_not_allowed";
 }
@@ -609,6 +622,7 @@ async function handleBootstrap(p: Record<string, unknown>) {
   } catch (e) {
     console.error("bootstrap translations failed", e);
   }
+  const ipGps = await getSetting<Record<string, boolean>>(IP_GPS_KEY, {});
   return json({
     ok: true,
     lang,
@@ -618,6 +632,7 @@ async function handleBootstrap(p: Record<string, unknown>) {
     me, kiosk, qr_required: qrRequired, qr_ok: qrScanned, qr_here: qrHere,
     branches: (branches ?? []).map((b: Record<string, unknown>) => ({
       ...b,
+      ip_gps: !!ipGps[String(b.id)],
       ...(admin ? {} : { access_key: undefined, photo_keep_days: undefined }), // keys only go to the admin
       staff: (staff ?? []).filter((s) => s.branch_id === b.id).map(staffView),
     })),
@@ -2828,9 +2843,15 @@ async function handleAccessSettings(p: Record<string, unknown>) {
     has_login: has0007, staff_login: !!(b as Record<string, unknown>).staff_login,
     my_ip: ipTag(String(p._ip ?? "")),
     auto_ip: { ...autoOf(await getSetting<AutoIp>(AUTO_IP_KEY, {}), id), pos_key_on: !!(await getSetting<string | null>(POS_KEY, null)) },
+    ip_gps: await ipGpsOn(id), has_geo: await branchHasGeo(id),
     devices: (devices ?? []).map((d) => ({ ...d, code: deviceCode(d.device_id), device_id: undefined })),
     rejected,
   });
+}
+
+async function branchHasGeo(id: string): Promise<boolean> {
+  const { data } = await supabase.from("branches").select("lat, lng").eq("id", id).maybeSingle();
+  return !!data && data.lat !== null && data.lng !== null;
 }
 
 async function handleSaveAccess(p: Record<string, unknown>) {
@@ -2841,6 +2862,11 @@ async function handleSaveAccess(p: Record<string, unknown>) {
   const row: Record<string, unknown> = { require_device: !!p.require_device, require_ip: !!p.require_ip, allowed_ips: ips };
   if (p.staff_login !== undefined) row.staff_login = !!p.staff_login;
   const { error } = await supabase.from("branches").update(row).eq("id", id);
+  if (!error && p.ip_gps !== undefined) {
+    const all = await getSetting<Record<string, boolean>>(IP_GPS_KEY, {});
+    all[id] = !!p.ip_gps;
+    await setSetting(IP_GPS_KEY, all);
+  }
   if (!error && p.auto_ip !== undefined) {
     const all = await getSetting<AutoIp>(AUTO_IP_KEY, {});
     all[id] = { ...autoOf(all, id), on: !!p.auto_ip };

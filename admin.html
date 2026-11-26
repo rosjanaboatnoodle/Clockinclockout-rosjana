@@ -590,6 +590,9 @@
         <span class="hint" style="margin:0;" id="myIp"></span>
       </div>
       <div id="ipRejected"></div>
+      <label class="check" style="margin-top:10px;"><input type="checkbox" id="ipGps"> 📍 ถ้าเน็ตไม่ตรง ให้เช็กตำแหน่ง GPS แทน (แนะนำ)</label>
+      <div class="hint">เน็ตร้านเปลี่ยนเลขเมื่อไหร่ พนักงานยังตอกได้ ถ้ามือถืออยู่ในรัศมีร้าน (มือถือจะขอตำแหน่งเฉพาะตอนเลขเน็ตไม่ตรง) · ใช้เน็ตมือถือจากที่อื่นยังตอกไม่ได้เหมือนเดิม</div>
+      <div class="hint" id="ipGpsInfo"></div>
       <label class="check" style="margin-top:10px;"><input type="checkbox" id="autoIp"> 🔄 อัปเดตเน็ตร้านให้เองจากเครื่อง POS ในร้าน</label>
       <div class="hint">เน็ตร้านเปลี่ยนเลขเมื่อไหร่ ระบบเพิ่มเลขใหม่ให้เองภายใน 5 นาที และเอาเลขเก่าที่ไม่เห็นเกิน 1 วันออกเอง (เลขที่กดเพิ่มเองไม่ถูกเอาออก) · ต้องตั้ง "รหัส POS" ในหน้านี้ และเปิด "เครื่องนี้อยู่ในร้าน" ที่คอม POS ในร้าน</div>
       <div class="hint" id="autoIpInfo"></div>
@@ -1473,6 +1476,8 @@
     if (!j.has_login) setMsg("accessStatus", "ตัวเลือก \"มือถือส่วนตัว\" และ \"เครื่องกลางร้าน\" ต้องรันไฟล์ 0007_staff_login.sql ใน Supabase ก่อน");
     $("reqIp").checked = !!j.require_ip;
     $("autoIp").checked = !!(j.auto_ip && j.auto_ip.on);
+    $("ipGps").checked = !!j.ip_gps;
+    $("ipGpsInfo").textContent = j.has_geo ? "" : "⚠️ ยังไม่ได้ตั้งตำแหน่งร้าน — ตั้งที่หัวข้อ \"📍 ตำแหน่งร้าน และการยืนยันตัวตน\" ก่อน ตัวเลือกนี้ถึงจะทำงาน";
     renderAccess();
   }
 
@@ -1587,7 +1592,7 @@
       approveRecent = n > 0 && confirm("อนุญาตเครื่องที่ใช้อยู่ตอนนี้ทั้งหมด (" + n + " เครื่อง ที่เปิดใน 30 วันล่าสุด) เลยไหม?\n\nตกลง = อนุญาตเลย พนักงานใช้ต่อได้ทันที\nยกเลิก = ต้องกดอนุญาตทีละเครื่อง");
     }
     const j = await api({ action: "save_access", admin_pin: adminPin, branch_id: branchId,
-      require_device: reqDevice, require_ip: reqIp, allowed_ips: access.allowed_ips, approve_recent: approveRecent, auto_ip: $("autoIp").checked,
+      require_device: reqDevice, require_ip: reqIp, allowed_ips: access.allowed_ips, approve_recent: approveRecent, auto_ip: $("autoIp").checked, ip_gps: $("ipGps").checked,
       ...(access.has_login ? { staff_login: reqLogin } : {}) });
     if (j && j.error === "need_migration_0007"){ setMsg("accessStatus", "ต้องรันไฟล์ 0007_staff_login.sql ใน Supabase ก่อน", false); return; }
     if (!j || !j.ok){ setMsg("accessStatus", j && j.error === "ip_needed" ? "ต่อ WiFi ร้านแล้วกด \"เพิ่มเน็ตที่ใช้อยู่ตอนนี้\" ก่อน" : errText(j), false); return; }
