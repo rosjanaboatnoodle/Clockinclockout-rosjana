@@ -3469,6 +3469,55 @@ async function handlePosShopIp(p: Record<string, unknown>) {
   return json({ ok: true, ip: tag, branches: ids.length, added });
 }
 
+// ค่าแรงตามช่วงวันที่ของระบบบัญชีร้าน (รอบบัญชีอาจไม่ตรงกับรอบเงินเดือน เช่น 6–5 กับ 1–30)
+// คิดเป็นต้นทุนค่าแรงรายวัน = ค่าแรงวันนั้น + โอที − หักสาย (+ ลาได้เงินในวันลา, + โบนัสประเมินในวันสิ้นรอบเงินเดือน)
+// ไม่หักเงินเบิก (เบิก = จ่ายล่วงหน้า ไม่ใช่ต้นทุนเพิ่ม) · ระบบตอกบัตรยังคิดเงินเดือนตามรอบเดิมทุกอย่าง
+// เรียกจากฟังก์ชัน books ด้วยรหัสลับร่วม BOOKS_WAGES_KEY (ตั้งใน Secrets ของทั้งสองโปรเจกต์)
+async function handleBooksWages(p: Record<string, unknown>) {
+  const want = Deno.env.get("BOOKS_WAGES_KEY") ?? "", got = String(p.key ?? "");
+  if (want.length < 8 || got.length !== want.length || !crypto.subtle) return json({ ok: false, error: "bad_key" });
+  let diff = 0; for (let i = 0; i < want.length; i++) diff |= want.charCodeAt(i) ^ got.charCodeAt(i);
+  if (diff) return json({ ok: false, error: "bad_key" });
+  const from = String(p.from ?? ""), to = String(p.to ?? ""), ok = (d: string) => /^\d{4}-\d{2}-\d{2}$/.test(d);
+  if (!ok(from) || !ok(to) || from > to || dayNum(to) - dayNum(from) > 400) return json({ ok: false, error: "bad_range" });
+  const { data: brs } = await supabase.from("branches").select("id");
+  const byDay: Record<string, number> = {};
+  const people: Array<{ label: string; branch: string; amount: number; days: number }> = [];
+  const add = (d: string, n: number) => { if (d >= from && d <= to && n) byDay[d] = round2((byDay[d] ?? 0) + n); };
+  for (const { id } of (brs ?? []) as Array<{ id: string }>) {
+    const b = await loadBranch(id);
+    if (!b) continue;
+    const { data: worked } = await supabase.from("punches").select("staff_id").eq("branch_id", b.id).gte("work_date", from).lte("work_date", to);
+    const ids = [...new Set(((worked ?? []) as Array<{ staff_id: number }>).map((x) => x.staff_id))];
+    if (!ids.length) continue;
+    const { data: staff } = await supabase.from("staff").select("id, branch_id, name, label, active, pay, period").in("id", ids);
+    for (const st of (staff ?? []) as StaffFull[]) {
+      const hist = staffPeriodHist(b, st);
+      const sum = await computeSummary(b, st, { start: from, end: to, cfg: periodFor(hist, from).cfg });
+      let amt = 0;
+      for (const d of sum.days as Array<{ date: string; base?: number; ot_pay?: number; late_deduct?: number }>) {
+        const n = (Number(d.base) || 0) + (Number(d.ot_pay) || 0) - (Number(d.late_deduct) || 0);
+        add(d.date, n); amt += n;
+      }
+      const leaveRate = Number(sum.totals.leave_day_rate) || 0;
+      // paid leave days inside the range (computeSummary already limited them to the yearly allowance)
+      const { data: lv } = await supabase.from("leaves").select("date").eq("staff_id", st.id).eq("status", "approved").gte("date", from).lte("date", to);
+      const paidN = Number(sum.totals.paid_leave_days) || 0;
+      const workedDays = new Set((sum.days as Array<{ date: string }>).map((d) => d.date));
+      for (const l of ((lv ?? []) as Array<{ date: string }>).filter((l) => !workedDays.has(l.date)).slice(0, paidN)) { add(l.date, leaveRate); amt += leaveRate; }
+      // evaluation bonus lands on the last day of its pay period
+      const { data: evs, error: evErr } = await supabase.from("evaluations").select("period_start, bonus").eq("staff_id", st.id).gte("period_start", addDays(from, -45)).lte("period_start", to);
+      if (!evErr) for (const e of (evs ?? []) as Array<{ period_start: string; bonus: number }>) {
+        const end = periodFor(hist, e.period_start).end, bn = Number(e.bonus) || 0;
+        if (end >= from && end <= to && bn) { add(end, bn); amt += bn; }
+      }
+      people.push({ label: st.label || st.name, branch: b.name, amount: round2(amt), days: Number(sum.totals.days_worked) || 0 });
+    }
+  }
+  const total = round2(Object.values(byDay).reduce((m, n) => m + n, 0));
+  return json({ ok: true, from, to, total, days: byDay, people: people.sort((a, b) => b.amount - a.amount) });
+}
+
 // รายงานค่าแรงในหน้าเจ้าของร้าน POS (อ่านอย่างเดียว ต้องใช้รหัสแอดมิน):
 // รอบเงินเดือนที่ปิดแล้วซึ่งสิ้นสุดในช่วงวันที่ + เงินเบิกที่อนุมัติในช่วงวันที่ ทุกสาขา
 async function handlePosWages(p: Record<string, unknown>) {
@@ -3683,6 +3732,7 @@ const ACTIONS: Record<string, (p: Record<string, unknown>) => Promise<Response>>
   pos_wages: handlePosWages,
   pos_note_tr: handlePosNoteTr,
   pos_shop_ip: handlePosShopIp,
+  books_wages: handleBooksWages,
 };
 
 Deno.serve(async (req) => {
