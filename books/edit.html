@@ -62,6 +62,9 @@ function changed(r, o) {
   if (Number(r.amount) !== Number(o.amount)) c.amount = r.amount;
   if (r.personal !== o.personal) c.personal = r.personal;
   if (r.main !== o.main || r.sub !== o.sub) { c.main = r.main; c.sub = r.sub; }
+  if ((r.qty ?? '') !== (o.qty ?? '')) c.qty = r.qty ?? '';
+  if ((r.unit || '') !== (o.unit || '')) c.unit = r.unit || '';
+  if ((r.pack ?? '') !== (o.pack ?? '')) c.pack = r.pack ?? '';
   return Object.keys(c).length ? c : null;
 }
 function draw() {
@@ -77,12 +80,21 @@ function draw() {
       ${r.del ? '' : `<div class="seg"><button class="s${r.personal ? '' : ' on'}" onclick="setv(${i},'personal',false)">🏪 ของร้าน</button><button class="p${r.personal ? ' on' : ''}" onclick="setv(${i},'personal',true)">👤 ส่วนตัว</button></div>
       ${r.personal ? '' : `<div class="cats"><div><label>หมวดหลัก</label><select onchange="setMain(${i},this.value)"><option value="">— เลือก —</option>${ms.map(m => `<option${m === r.main ? ' selected' : ''}>${esc(m)}</option>`).join('')}</select></div>
         ${subs.length ? `<div><label>หมวดรอง</label><select onchange="setv(${i},'sub',this.value)">${subs.map(s => `<option${s === r.sub ? ' selected' : ''}>${esc(s)}</option>`).join('')}</select></div>` : ''}</div>`}`}
+      ${r.del || r.personal ? '' : qtyRow(r, o, i)}
       <div class="ft"><span>${st}</span><button class="lnk" onclick="setv(${i},'del',${!r.del})">${r.del ? '↩︎ เอากลับ' : '🗑 ลบข้อนี้'}</button></div>
     </div>`;
   }).join('') + '<p class="mu" style="font-size:14px;margin-top:16px">ข้อที่ไม่ได้แก้ ไม่ต้องทำอะไร ระบบบันทึกไว้แล้ว</p>';
   const n = ROWS.filter((r, i) => changed(r, ORIG[i])).length, b = $('#save');
   b.disabled = !n; b.textContent = n ? `💾 บันทึก (แก้ ${n} ข้อ)` : 'ไม่มีอะไรเปลี่ยน';
   $('#bar').style.display = 'block';
+}
+// จำนวน/หน่วย/ขนาดแพ็ค + ผลการเข้าสต็อก (เฉพาะของร้าน)
+const fq = n => Number(n).toLocaleString('th-TH', {maximumFractionDigits: 3});
+const WHY = {item: 'ยังไม่รู้ว่าเป็นของตัวไหนในสต็อก (เจ้าของจะจับคู่ให้)', qty: 'ใส่จำนวนด้านบน แล้วกดบันทึก', pack: 'ใส่ว่าแพ็คละเท่าไหร่ แล้วกดบันทึก', unit: 'หน่วยไม่ตรงกับสต็อก (เจ้าของจะตรวจให้)', branch: 'ยังไม่มีสาขาในระบบสต็อก'};
+function qtyRow(r, o, i) {
+  const showPack = r.pack || o.pack || o.stock_note === 'pack';
+  const stock = o.stock_status === 'ok' ? `<span class="ok">📦 เข้าสต็อก ${fq(o.stock_qty)} ${esc(o.stock_unit || '')}</span>` : o.stock_status === 'review' ? `<span class="gs">📦 ยังไม่เข้าสต็อก: ${WHY[o.stock_note] || 'รอตรวจ'}</span>` : '';
+  return `<div class="cats"><div><label>จำนวน</label><input type="number" inputmode="decimal" value="${r.qty ?? ''}" onchange="setv(${i},'qty',this.value===''?null:+this.value)"></div><div><label>หน่วย</label><input value="${esc(r.unit || '')}" placeholder="กก, ถุง, แพ็ค" onchange="setv(${i},'unit',this.value.trim())"></div>${showPack ? `<div><label>${esc(r.unit || 'แพ็ค')}ละ${o.stock_unit ? ' (' + esc(o.stock_unit) + ')' : ''}</label><input type="number" inputmode="numeric" value="${r.pack ?? ''}" onchange="setv(${i},'pack',this.value===''?null:+this.value)"></div>` : ''}</div>${stock ? `<div style="font-size:14px;margin-top:6px">${stock}</div>` : ''}`;
 }
 function setv(i, k, v) { ROWS[i][k] = v; draw(); }
 function setMain(i, m) { const s = subsOf(m); ROWS[i].main = m; ROWS[i].sub = s.includes(ROWS[i].sub) ? ROWS[i].sub : (s[0] || (CATS.some(c => c.main === m && c.sub === m) ? m : '')); draw(); }
@@ -96,7 +108,7 @@ async function save() {
     load(r.rows); toast('✅ บันทึกแล้ว ปิดหน้านี้ได้เลย');
   } catch (e) { toast('เชื่อมต่อไม่ได้ ลองใหม่'); draw(); }
 }
-function load(rows) { ORIG = rows.map(r => ({...r, amount: Number(r.amount), personal: !!r.personal, main: r.main || '', sub: r.sub || ''})); ROWS = ORIG.map(r => ({...r})); draw(); }
+function load(rows) { ORIG = rows.map(r => ({...r, amount: Number(r.amount), personal: !!r.personal, main: r.main || '', sub: r.sub || '', qty: r.qty == null ? null : Number(r.qty), pack: r.pack == null ? null : Number(r.pack), unit: r.unit || ''})); ROWS = ORIG.map(r => ({...r})); draw(); }
 (async () => {
   try {
     const r = T ? await api('card_get') : {ok: false, error: 'link_expired'};
