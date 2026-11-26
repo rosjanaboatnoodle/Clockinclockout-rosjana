@@ -88,17 +88,25 @@ async function login(pw) {
   try { const r = await api('login'); if (!r.ok) return drawLogin('เข้าไม่ได้: ' + (r.error || '')); if (PW) sessionStorage.setItem('bk_pw', PW);
     if (rem) { const t = await api('owner_token').catch(() => null); if (t && t.ok) { TOK = t.tok; lsSet('bk_tok', TOK); toParent({bk: 'tok', tok: TOK}); } } S.cats = r.categories; S.cycleDay = r.cycle_day; S.today = r.today; S.webUrl = r.web_url;
     if (!r.web_url) api('settings_save', {web_url: location.origin + location.pathname}).catch(() => {});
+    if (r.cycle && r.range) { S.cyc = {start: r.cycle.start, end: r.cycle.end}; S.d = r.range; draw(); freshWages(); return; }
     const c = await api('cycle', {date: r.today}); S.cyc = {start: c.start, end: c.end}; await load(); } catch (e) {}
 }
-async function load() { $('#app').innerHTML = shell('<p class="mu c" style="padding:40px">กำลังโหลด…</p>'); const r = await api('range', {from: S.cyc.start, to: S.cyc.end}); S.d = r; draw(); }
+async function load() { $('#app').innerHTML = shell('<p class="mu c" style="padding:40px">กำลังโหลด…</p>'); const r = await api('range', {from: S.cyc.start, to: S.cyc.end}); S.d = r; draw(); freshWages(); }
+/* ค่าแรงจากระบบตอกบัตรคำนวณนาน: หน้าแสดงค่าที่จำไว้ก่อน แล้วค่อยอัปเดตเมื่อได้ค่าล่าสุด (ไม่ต้องรอ) */
+async function freshWages() {
+  const d = S.d, w = d && d.wages; if (!d || !w || w.error === 'not_set' || (!w.stale && w.at)) return;
+  const key = S.cyc.start + S.cyc.end; S.wload = true; if (S.tab === 'sum') draw();
+  try { const r = await api('wages', {from: S.cyc.start, to: S.cyc.end}); if (r.ok && S.d === d && key === S.cyc.start + S.cyc.end) { d.wages = r.wages; } } catch (e) {}
+  S.wload = false; if (S.d === d) draw();
+}
 async function moveCyc(n) { const d = n > 0 ? addD(S.cyc.end, 1) : addD(S.cyc.start, -1); const c = await api('cycle', {date: d}); S.cyc = {start: c.start, end: c.end}; await load(); }
-const TABS = [['sum', '📊 ภาพรวม'], ['io', '⚖️ รายรับ–รายจ่าย'], ['list', '🧾 รายการรายจ่าย'], ['set', '⚙️ ตั้งค่า']];
+const TABS = [['sum', '📊 ภาพรวม'], ['io', '⚖️ รายรับ–รายจ่าย'], ['list', '🧾 รายการรายจ่าย'], ['stock', '📦 สต็อก/ราคา'], ['set', '⚙️ ตั้งค่า']];
 function shell(body) {
   return `${EMBED ? '' : `<div class="top"><h1>📒 บัญชีร้าน รสจนา</h1><button class="sm" onclick="forget();drawLogin()">ออก</button></div>`}
-  <div class="tabs">${TABS.map(([k, n]) => `<button class="${S.tab === k ? 'on' : ''}" onclick="S.tab='${k}';draw()">${n}${k === 'list' && S.d && S.d.review_all ? ` <span class="tag rv">${S.d.review_all}</span>` : ''}</button>`).join('')}</div><div class="wrap">${body}</div>`;
+  <div class="tabs">${TABS.map(([k, n]) => `<button class="${S.tab === k ? 'on' : ''}" onclick="S.tab='${k}';draw()">${n}${k === 'list' && S.d && S.d.review_all ? ` <span class="tag rv">${S.d.review_all}</span>` : ''}${k === 'stock' && S.d && S.d.stock_review ? ` <span class="tag rv">${S.d.stock_review}</span>` : ''}</button>`).join('')}</div><div class="wrap">${body}</div>`;
 }
 const cycBar = () => `<div class="cyc"><button onclick="moveCyc(-1)">‹</button><b>รอบ ${dTh(S.cyc.start)} – ${dTh(S.cyc.end)} ${S.cyc.end.slice(0, 4)}</b><button onclick="moveCyc(1)" ${S.cyc.start > S.today ? 'disabled' : ''}>›</button></div>`;
-function draw() { if (!S.d) return; const f = {sum: vSum, io: vIO, list: vList, set: vSet}[S.tab] || vSum; $('#app').innerHTML = shell(f()); window.scrollTo(0, Math.min(window.scrollY, 99999)); }
+function draw() { if (!S.d) return; const f = {sum: vSum, io: vIO, list: vList, stock: vStock, set: vSet}[S.tab] || vSum; $('#app').innerHTML = shell(f()); window.scrollTo(0, Math.min(window.scrollY, 99999)); }
 
 /* ---------- คำนวณ ---------- */
 function calc(d) {
@@ -138,7 +146,7 @@ function vSum() {
     <div class="kp"><span>รายจ่ายร้าน</span><b>${baht(c.exp)}</b><small>${S.d.rows.filter(r => !r.personal).length} รายการ</small></div>
     <div class="kp"><span>กำไร</span><b class="${prof >= 0 ? 'pos' : 'neg'}">${baht(prof)}</b><small>${c.inc ? pct.toFixed(1) + '% ของยอดขาย' : ''}</small></div>
     <div class="kp"><span>ต้นทุนวัตถุดิบ</span><b>${c.inc ? (mats / c.inc * 100).toFixed(0) + '%' : '—'}</b><small>${baht(mats)}</small></div>
-    ${labor || (S.d.wages && S.d.wages.ok) ? `<div class="kp"><span>ค่าแรง</span><b>${c.inc ? (labor / c.inc * 100).toFixed(0) + '%' : '—'}</b><small>${baht(labor)}${c.wage && labor - c.wage > 0 ? ` <span class="mu">(พนักงาน ${baht(c.wage)} + บันทึกเอง ${baht(labor - c.wage)})</span>` : ''}</small></div>` : ''}
+    ${labor || (S.d.wages && S.d.wages.ok) ? `<div class="kp"><span>ค่าแรง${S.wload ? ' <small class="mu">⟳ กำลังอัปเดต</small>' : ''}</span><b>${c.inc ? (labor / c.inc * 100).toFixed(0) + '%' : '—'}</b><small>${baht(labor)}${c.wage && labor - c.wage > 0 ? ` <span class="mu">(พนักงาน ${baht(c.wage)} + บันทึกเอง ${baht(labor - c.wage)})</span>` : ''}</small></div>` : ''}
     ${S.d.review_all ? `<div class="kp warn" onclick="S.tab='list';S.filter='review';draw()"><span>⚠️ รอตรวจหมวด</span><b>${S.d.review_all} รายการ</b><small>กดเพื่อตรวจ</small></div>` : ''}
   </div>
   <div class="card"><h3>สรุปสั้น ๆ</h3><ul class="tips">${tips.map(t => `<li>${t}</li>`).join('')}</ul></div>
@@ -162,10 +170,13 @@ function vIO() {
 }
 async function loadYear() {
   S.year = null; draw();
-  const starts = [S.cyc.start]; for (let i = 0; i < 11; i++) { const c = await api('cycle', {date: addD(starts[0], -1)}); starts.unshift(c.start); }
+  // วันเริ่มรอบย้อนหลัง 11 รอบ คิดในเครื่องเลย (ไม่ต้องถามเซิร์ฟเวอร์ทีละรอบ)
+  const cd = Math.min(28, Math.max(1, +S.cycleDay || 6)), starts = [S.cyc.start];
+  for (let i = 0; i < 11; i++) { const [y, m] = starts[0].split('-').map(Number), pm = m === 1 ? 12 : m - 1, py = m === 1 ? y - 1 : y; starts.unshift(`${py}-${String(pm).padStart(2, '0')}-${String(cd).padStart(2, '0')}`); }
   const r = await api('range', {from: starts[0], to: S.cyc.end});
-  const out = starts.map((s, i) => { const e = i < 11 ? addD(starts[i + 1], -1) : S.cyc.end; const sub = {rows: r.rows.filter(x => x.date >= s && x.date <= e), trips: r.trips.filter(x => x.date >= s && x.date <= e), income: r.income.filter(x => x.date >= s && x.date <= e), wages: r.wages, from: s, to: e}; return {s, e, c: calc(sub)}; });
-  S.year = out; if (S.tab === 'io' && S.mode === 'month') draw();
+  if (r.wages && (r.wages.stale || !r.wages.at)) api('wages', {from: starts[0], to: S.cyc.end}).then(x => { if (x.ok) { r.wages = x.wages; if (S.year) { build(); if (S.tab === 'io' && S.mode === 'month') draw(); } } }).catch(() => {});
+  const build = () => { S.year = starts.map((s, i) => { const e = i < 11 ? addD(starts[i + 1], -1) : S.cyc.end; const sub = {rows: r.rows.filter(x => x.date >= s && x.date <= e), trips: r.trips.filter(x => x.date >= s && x.date <= e), income: r.income.filter(x => x.date >= s && x.date <= e), wages: r.wages, from: s, to: e}; return {s, e, c: calc(sub)}; }); };
+  build(); if (S.tab === 'io' && S.mode === 'month') draw();
 }
 function yearTable() {
   const y = S.year, mx = Math.max(1, ...y.map(m => Math.max(m.c.inc, m.c.exp))), ytd = y.filter(m => m.s.slice(0, 4) === S.cyc.end.slice(0, 4)).reduce((a, m) => a + m.c.inc, 0);
@@ -227,6 +238,42 @@ async function saveNew() { const f = readForm(); if (!f.item || !(+f.amount > 0)
 function editTrip(id) { const t = S.d.trips.find(x => x.id === id); modal(`<h3>🧺 ยอดตลาด</h3><label>ชื่อ</label><input id="tN" value="${esc(t.name)}"><label>ยอดจ่ายทั้งหมด (บาท)</label><input id="tT" type="number" inputmode="decimal" value="${t.total}"><label>วันที่</label><input id="tD" type="date" value="${t.date}"><p class="mu sm">รายการวัตถุดิบที่ส่งในไลน์วันเดียวกันจะผูกกับยอดนี้เอง ส่วนที่ไม่ได้แยก นับเป็น "ตลาด–ไม่ระบุรายการ"</p><div class="row" style="margin-top:14px"><button class="d nb" onclick="if(confirm('ลบยอดตลาดนี้?'))api('trip_save',{id:'${id}',delete:1}).then(()=>{modal();load()})">ลบ</button><button onclick="modal()">ยกเลิก</button><button class="p" onclick="api('trip_save',{id:'${id}',name:$('#tN').value,total:$('#tT').value,date:$('#tD').value}).then(()=>{modal();load()})">บันทึก</button></div>`); }
 
 /* ---------- ตั้งค่า ---------- */
+/* ---------- สต็อก/ราคา (เฟส 2): ของที่ซื้อเข้าสต็อกเอง · รายการที่ต้องจับคู่ · ราคาต่อหน่วย ---------- */
+let STK = null;
+const fq = n => Number(n).toLocaleString('th-TH', {maximumFractionDigits: 3});
+const SWHY = {item: 'ยังไม่รู้ว่าเป็นของตัวไหนในสต็อก', qty: 'ไม่ได้บอกจำนวน', pack: 'ไม่รู้ว่าแพ็คละเท่าไหร่', unit: 'หน่วยไม่ตรงกับสต็อก', branch: 'ยังไม่มีสาขาในระบบสต็อก'};
+async function loadStock() { const [rv, up] = await Promise.all([api('stock_review'), api('unit_prices')]); STK = {rv, up, open: null}; if (S.tab === 'stock') draw(); }
+function vStock() {
+  if (!STK) { loadStock(); return '<p class="mu c" style="padding:30px">กำลังโหลด…</p>'; }
+  const {rv, up} = STK, cat = rv.catalog || [], unitOf = n => (cat.find(c => c.name === n) || {}).unit || '';
+  const many = (rv.branches || []).length > 1;
+  const review = (rv.rows || []).map(r => `<div class="ex rv" id="sk${r.id}"><div class="n"><b>${esc(r.item)}</b> <small class="mu">${r.qty ? fq(r.qty) + ' ' + esc(r.unit || '') : ''}${r.pack ? ' (ละ ' + fq(r.pack) + ')' : ''} · ${baht2(r.amount)} · ${dTh(r.date)}</small><br><small class="neg">${SWHY[r.stock_note] || 'รอตรวจ'}</small></div>
+    <div class="ctl" style="margin-top:4px"><input list="skCat" id="ski${r.id}" placeholder="ของในสต็อก" value="${esc(r.stock_item || '')}" style="flex:2;min-width:150px" oninput="$('#sku${r.id}').textContent=unitOf2(this.value)">
+    <input id="skq${r.id}" type="number" inputmode="decimal" placeholder="จำนวน" value="${r.qty ?? ''}" style="flex:1;min-width:70px"><input id="skn${r.id}" placeholder="หน่วยที่ซื้อ" value="${esc(r.unit || '')}" style="flex:1;min-width:70px">
+    <input id="skp${r.id}" type="number" inputmode="numeric" placeholder="ต่อแพ็ค" value="${r.pack ?? ''}" style="flex:1;min-width:80px"><small class="mu" id="sku${r.id}" style="align-self:center">${esc(r.stock_unit || unitOf(r.stock_item))}</small>
+    ${many ? `<select id="skb${r.id}" style="flex:1;min-width:110px">${rv.branches.map(b => `<option value="${esc(b.id)}"${(r.branch_id || rv.default_branch) === b.id ? ' selected' : ''}>${esc(b.name)}</option>`).join('')}</select>` : ''}
+    <button class="g sm" onclick="stockFix(${r.id})">บันทึก</button><button class="sm" onclick="stockSkip(${r.id})">ไม่ใช่ของสต็อก</button></div></div>`).join('');
+  const prices = (up.items || []).map((it, i) => { const ch = it.change; return `<tr onclick="STK.open=STK.open===${i}?null:${i};draw()" style="cursor:pointer"><td><b>${esc(it.name)}</b><br><small class="mu">${esc(it.last.buy)} · ${dTh(it.last.date)}</small></td><td class="r b">${baht2(it.last.price)}<small class="mu">/${esc(it.unit)}</small></td><td class="r">${ch == null ? '<span class="mu">—</span>' : `<b class="${ch > 0 ? 'neg' : ch < 0 ? 'pos' : ''}">${ch > 0 ? '▲' : ch < 0 ? '▼' : ''} ${Math.abs(ch).toFixed(1)}%</b>`}</td><td class="r">${baht2(it.avg)}<br><small class="mu">${baht2(it.min)}–${baht2(it.max)}</small></td><td class="r">${it.n}<br><small class="mu">${baht(it.spent)}</small></td></tr>
+    ${STK.open === i ? `<tr><td colspan="5" style="background:#faf6f0"><table class="t">${it.history.slice().reverse().map(h => `<tr><td>${dTh(h.date)}</td><td>${esc(h.buy)}</td><td class="r">${fq(h.qty)} ${esc(h.unit)}</td><td class="r">${baht2(h.amount)}</td><td class="r b">${baht2(h.price)}/${esc(h.unit)}</td></tr>`).join('')}</table></td></tr>` : ''}`; }).join('');
+  return `<datalist id="skCat">${cat.map(c => `<option value="${esc(c.name)}">${esc(c.unit || '')}</option>`).join('')}</datalist>
+  <div class="card"><h3>รอจับคู่เข้าสต็อก ${(rv.rows || []).length ? `<span class="tag rv">${rv.rows.length}</span>` : ''}</h3>
+  <p class="mu sm">ซื้อวัตถุดิบผ่านไลน์ → เข้าสต็อกเอง ถ้าชื่อตรงหรือเคยจับคู่ไว้ · รายการด้านล่างระบบไม่แน่ใจ เลือกของในสต็อก/ใส่จำนวน แล้วกดบันทึก ระบบจำไว้ครั้งหน้า · แพ็ค/ลัง ใส่ช่อง "ละ" ว่ามีกี่ชิ้นต่อแพ็ค</p>
+  ${review || '<p class="mu">✅ ไม่มีรายการรอ</p>'}</div>
+  <div class="card ovx"><h3>ราคาต่อหน่วย (6 เดือนล่าสุด)</h3><p class="mu sm">ราคาครั้งล่าสุดเทียบครั้งก่อน · ▲ แดง = แพงขึ้น · ▼ เขียว = ถูกลง · กดแถวเพื่อดูประวัติ</p>
+  ${prices ? `<table class="t"><tr><th>ของ</th><th class="r">ล่าสุด</th><th class="r">เทียบครั้งก่อน</th><th class="r">เฉลี่ย (ต่ำ–สูง)</th><th class="r">ซื้อ (ครั้ง/บาท)</th></tr>${prices}</table>` : '<p class="mu">ยังไม่มีของที่เข้าสต็อกผ่านบัญชี</p>'}</div>`;
+}
+function unitOf2(n) { const c = ((STK && STK.rv.catalog) || []).find(x => x.name === n); return c ? (c.unit || '') : ''; }
+async function stockFix(id) {
+  const g = k => $('#sk' + k + id), p = {id, item_name: g('i').value.trim(), qty: g('q').value, unit: g('n').value.trim(), pack: g('p').value};
+  if (g('b')) p.branch_id = g('b').value;
+  if (!p.item_name) return toast('เลือกของในสต็อกก่อน');
+  const r = await api('stock_fix', p);
+  if (!r.ok) return toast(r.error === 'unknown_stock_item' ? 'ไม่มีชื่อนี้ในระบบสต็อก เลือกจากรายการ' : 'บันทึกไม่ได้: ' + r.error);
+  toast(r.row && r.row.stock_status === 'ok' ? `เข้าสต็อกแล้ว ${fq(r.row.stock_qty)} ${r.row.stock_unit || ''}${r.also ? ` · อีก ${r.also} รายการเข้าตามด้วย` : ''}` : 'บันทึกแล้ว แต่ยังขาดข้อมูล: ' + (SWHY[r.row && r.row.stock_note] || ''));
+  STK = null; draw(); api('range', {from: S.cyc.start, to: S.cyc.end}).then(d => { S.d = d; });
+}
+async function stockSkip(id) { await api('stock_fix', {id, skip: true}); toast('ข้ามแล้ว ไม่เข้าสต็อก'); STK = null; draw(); }
+
 let SET = null;
 async function loadSet() { const [u, ru] = await Promise.all([api('users'), api('rules')]); SET = {...u, rules: ru.rules}; if (S.tab === 'set') draw(); }
 function vSet() {
@@ -239,11 +286,11 @@ function vSet() {
     <tr><td>ค่าแรงจากระบบตอกบัตร</td><td class="r">${!st.wages ? '<span class="neg">ยังไม่ได้ใส่ BOOKS_WAGES_KEY</span>' : S.d && S.d.wages && !S.d.wages.ok ? `<span class="neg">ต่อไม่ได้: ${esc(S.d.wages.error)}</span>` : '✅ ตั้งค่าแล้ว'}</td></tr></table></div>
   <div class="card"><h3>เครื่องนี้</h3><p class="mu sm">${TOK ? 'จำรหัสไว้แล้ว เปิดหน้านี้ได้เลยไม่ต้องใส่รหัส (ครบ 180 วัน หรือเปลี่ยนรหัสแอดมิน จะถามใหม่)' : 'ยังไม่ได้จำ ต้องใส่รหัสทุกครั้งที่เปิดใหม่'}</p><button class="d" onclick="if(confirm('ออกจากระบบ และให้เครื่องนี้ลืมรหัส?')){forget();drawLogin()}">ออกจากระบบ / ลืมเครื่องนี้</button></div>
   <div class="card"><h3>คนที่ส่งรายจ่ายเข้าไลน์ได้</h3><p class="mu sm">คนที่ทักบอท "บันทึกรายจ่าย" ครั้งแรกจะขึ้นที่นี่ กดอนุญาตก่อนถึงจะบันทึกได้ (กันคนนอก)</p>
-    ${SET.users.map(u => `<div class="set-row"><input value="${esc(u.name)}" onchange="api('user_save',{user_id:'${esc(u.user_id)}',allowed:${u.allowed},name:this.value})"><span class="nb mu sm">รหัส ${esc(u.code)}</span>${u.allowed ? `<button class="sm nb" onclick="api('user_save',{user_id:'${esc(u.user_id)}',allowed:false}).then(loadSet)">ระงับ</button>` : `<button class="sm g nb" onclick="api('user_save',{user_id:'${esc(u.user_id)}',allowed:true}).then(loadSet)">อนุญาต</button>`}<button class="sm d nb" onclick="if(confirm('ลบ?'))api('user_save',{user_id:'${esc(u.user_id)}',delete:1}).then(loadSet)">✕</button></div>`).join('') || '<p class="mu">ยังไม่มี — ให้ทักบอทในไลน์ 1 ครั้ง แล้วกดรีเฟรชหน้านี้</p>'}</div>
+    ${SET.users.map(u => `<div class="set-row"><input value="${esc(u.name)}" onchange="api('user_save',{user_id:'${esc(u.user_id)}',allowed:${u.allowed},name:this.value})">${(SET.branches || []).length > 1 ? `<select class="nb" style="width:auto" title="ของที่คนนี้/กลุ่มนี้ส่ง เข้าสาขา" onchange="api('user_save',{user_id:'${esc(u.user_id)}',allowed:${u.allowed},branch_id:this.value}).then(()=>toast('บันทึกสาขาแล้ว'))"><option value="">สาขาหลัก</option>${SET.branches.map(b => `<option value="${esc(b.id)}"${u.branch_id === b.id ? ' selected' : ''}>${esc(b.name)}</option>`).join('')}</select>` : ''}<span class="nb mu sm">รหัส ${esc(u.code)}</span>${u.allowed ? `<button class="sm nb" onclick="api('user_save',{user_id:'${esc(u.user_id)}',allowed:false}).then(loadSet)">ระงับ</button>` : `<button class="sm g nb" onclick="api('user_save',{user_id:'${esc(u.user_id)}',allowed:true}).then(loadSet)">อนุญาต</button>`}<button class="sm d nb" onclick="if(confirm('ลบ?'))api('user_save',{user_id:'${esc(u.user_id)}',delete:1}).then(loadSet)">✕</button></div>`).join('') || '<p class="mu">ยังไม่มี — ให้ทักบอทในไลน์ 1 ครั้ง แล้วกดรีเฟรชหน้านี้</p>'}</div>
   <div class="card"><h3>รับสรุปทางไลน์ (บัญชีใหม่)</h3><p class="mu sm">แอดเพื่อนบัญชีไลน์สรุป แล้วกดอนุญาตที่นี่ · ส่งสรุปทุกครั้งที่ปิดกะใน POS พร้อมจำนวนรายการรอตรวจ</p>
     ${SET.report_to.map(x => `<div class="set-row"><span>✅ รหัส ${esc(x.code)}</span><button class="sm d nb" onclick="api('report_save',{id:'${esc(x.id)}',allow:false}).then(loadSet)">เลิกส่ง</button></div>`).join('')}
     ${SET.report_pending.map(x => `<div class="set-row"><span>⏳ ขอรับสรุป รหัส ${esc(x.code)}</span><button class="sm g nb" onclick="api('report_save',{id:'${esc(x.id)}',allow:true}).then(loadSet)">อนุญาต</button></div>`).join('')}
-    <button style="margin-top:8px" onclick="api('report_test').then(r=>toast(r.sent?'ส่งแล้ว '+r.sent+' คน':'ยังไม่มีคนรับ/ยังไม่ตั้งค่า'))">ส่งสรุปวันนี้ทดสอบ</button></div>
+    <button style="margin-top:8px" onclick="api('report_test').then(r=>toast(r.sent?'ส่งแล้ว '+r.sent+' คน':'ยังไม่มีคนรับ/ยังไม่ตั้งค่า'))">ส่งสรุปวันนี้ทดสอบ</button> <button style="margin-top:8px" onclick="api('month_test').then(r=>toast(r.sent?'ส่งสรุปเดือนแล้ว '+r.sent+' คน':'ยังไม่มีคนรับ/ยังไม่ตั้งค่า'))">ส่งสรุปเดือน (รอบที่แล้ว) ทดสอบ</button><p class="mu sm" style="margin:6px 0 0">สรุปเดือนส่งเองตอนปิดกะครั้งแรกของรอบใหม่ · พิมพ์ "สรุปเดือน" ในไลน์สรุปก็ได้</p></div>
   <div class="card"><h3>หมวดรายจ่าย</h3><p class="mu sm">หมวดหลัก / หมวดย่อย ใช้ในช่องเลือกหมวดและรายงาน</p><div id="catEd">${S.cats.map((c, i) => `<div class="set-row"><input class="cM" value="${esc(c.main)}" placeholder="หมวดหลัก"><input class="cS" value="${esc(c.sub)}" placeholder="หมวดย่อย"><button class="sm d nb" onclick="this.parentNode.remove()">✕</button></div>`).join('')}</div>
     <div class="row" style="margin-top:8px"><button onclick="document.getElementById('catEd').insertAdjacentHTML('beforeend','<div class=set-row><input class=cM placeholder=หมวดหลัก><input class=cS placeholder=หมวดย่อย><button class=\\'sm d nb\\' onclick=this.parentNode.remove()>✕</button></div>')">＋ เพิ่มหมวด</button><button class="p" onclick="saveCats()">บันทึกหมวด</button></div></div>
   <div class="card"><h3>คำจำแนกอัตโนมัติ (${SET.rules.length} คำ)</h3><p class="mu sm">ชื่อที่มีคำนี้ จะเข้าหมวดนี้เอง · แก้หมวดในหน้ารายการแล้วระบบจำเพิ่มให้</p>
@@ -253,12 +300,20 @@ function vSet() {
   <div class="card"><h3>ย้ายข้อมูลจาก Google Sheet เดิม</h3><p class="mu sm">ดึงแท็บ "รายจ่ายเดือน …" และ "AutoClassify" เข้าระบบ (ทำซ้ำได้ ไม่ซ้ำซ้อน) · ต้องแชร์ Sheet ให้อีเมลบริการของระบบ (สิทธิ์ผู้ดู) ก่อน</p>
     <label>ลิงก์ Sheet บัญชีรายรับรายจ่าย</label><input id="sh1" value="https://docs.google.com/spreadsheets/d/1rWxn57pVmyk-iWmxI_wEuqAj342lkEdy_XD4BIMXTwk/edit">
     <label>ลิงก์ Sheet CONFIG (มีแท็บ AutoClassify)</label><input id="sh2" value="https://docs.google.com/spreadsheets/d/1PmU_Vu_11RjSQQgnK0ZlcZwAvXRqvW7v5RGSYsCQ4dw/edit">
-    <button class="p" style="margin-top:10px" onclick="runImport()">เริ่มย้ายข้อมูล</button><div id="impLog" class="sm" style="margin-top:8px"></div></div>
+    <button class="p" style="margin-top:10px" onclick="runImport()">เริ่มย้ายข้อมูล</button> <button style="margin-top:8px" onclick="runPending()">ดึงรายการที่ยังค้าง (ยังไม่ได้ลงแท็บรายจ่ายเดือน)</button><p class="mu sm" style="margin:6px 0 0">รายการที่บอทเก่าบันทึกไว้แต่ยังไม่ได้ส่งเข้าแท็บ "รายจ่ายเดือน…" (อยู่ในแท็บ RAW_OCR ของ Sheet CONFIG) จะเข้ามาเป็น ⚠️ รอตรวจ · กดซ้ำได้ ไม่ดึงซ้ำ</p><div id="impLog" class="sm" style="margin-top:8px"></div></div>
+  ${(SET.branches || []).length > 1 ? `<div class="card"><h3>สาขาหลัก</h3><p class="mu sm">ของที่ซื้อแล้วไม่ได้บอกสาขา (ไม่ได้พิมพ์ "สาขา X" บรรทัดแรก และคน/กลุ่มที่ส่งไม่ได้ผูกสาขา) จะเข้าสต็อกสาขานี้</p><select onchange="api('settings_save',{default_branch:this.value}).then(()=>toast('บันทึกแล้ว'))">${SET.branches.map(b => `<option value="${esc(b.id)}"${SET.default_branch === b.id ? ' selected' : ''}>${esc(b.name)}</option>`).join('')}</select></div>` : ''}
   <div class="card"><h3>รอบบัญชี</h3><label>เริ่มรอบวันที่ (เดิมใช้วันที่ 6 ถึงวันที่ 5)</label><div class="row"><input id="cd" type="number" min="1" max="28" value="${S.cycleDay}"><button class="p nb" onclick="api('settings_save',{cycle_day:$('#cd').value}).then(()=>location.reload())">บันทึก</button></div></div>`;
 }
 async function saveCats() { const cats = [...document.querySelectorAll('#catEd .set-row')].map(r => ({main: r.querySelector('.cM').value.trim(), sub: r.querySelector('.cS').value.trim()})).filter(c => c.main); const r = await api('cats_save', {cats}); if (r.ok) { S.cats = cats; toast('บันทึกหมวดแล้ว'); draw(); } }
 async function addRule() { const k = $('#rK').value.trim(), v = $('#rC').value; if (!k || !v) return toast('ใส่คำและเลือกหมวด'); const p = v === '__personal' ? {kind: 'personal'} : v === '__trip' ? {kind: 'trip'} : {kind: 'expense', main: v.split('|')[0], sub: v.split('|')[1]}; await api('rule_save', {keyword: k, ...p}); toast('เพิ่มแล้ว'); loadSet(); }
 const sheetId = u => (/\/d\/([A-Za-z0-9_-]{20,})/.exec(u) || [])[1] || u.trim();
+async function runPending() {
+  const L = $('#impLog'); L.innerHTML = 'กำลังดึง…';
+  const r = await api('import_pending', {sheet_id: sheetId($('#sh2').value)});
+  if (!r.ok) { L.innerHTML = `<span class="neg">ดึงไม่ได้: ${esc(r.error)}</span>${r.sa ? `<br>ให้แชร์ Sheet CONFIG ให้ <b>${esc(r.sa)}</b> (ผู้มีสิทธิ์อ่าน)` : ''}`; return; }
+  L.innerHTML = r.n || r.trips ? `✅ ดึงมา ${r.n} รายการ${r.trips ? ` · รอบตลาด ${r.trips} รอบ` : ''} · ร้าน ${baht(r.sum)}${r.from ? ` · ${dTh(r.from)}–${dTh(r.to)}` : ''}<br>ไปที่ 🧾 รายการรายจ่าย › ⚠️ รอตรวจ แล้วกด ‹ ย้อนรอบเพื่อตรวจทีละรอบ` : '✅ ไม่มีรายการค้างแล้ว';
+  const d = await api('range', {from: S.cyc.start, to: S.cyc.end}); S.d = d;
+}
 async function runImport() {
   const L = $('#impLog'), log = t => { L.innerHTML += t + '<br>'; };
   L.innerHTML = '';
