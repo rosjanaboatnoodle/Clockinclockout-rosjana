@@ -590,6 +590,9 @@
         <span class="hint" style="margin:0;" id="myIp"></span>
       </div>
       <div id="ipRejected"></div>
+      <label class="check" style="margin-top:10px;"><input type="checkbox" id="autoIp"> 🔄 อัปเดตเน็ตร้านให้เองจากเครื่อง POS ในร้าน</label>
+      <div class="hint">เน็ตร้านเปลี่ยนเลขเมื่อไหร่ ระบบเพิ่มเลขใหม่ให้เองภายใน 5 นาที และเอาเลขเก่าที่ไม่เห็นเกิน 1 วันออกเอง (เลขที่กดเพิ่มเองไม่ถูกเอาออก) · ต้องตั้ง "รหัส POS" ในหน้านี้ และเปิด "เครื่องนี้อยู่ในร้าน" ที่คอม POS ในร้าน</div>
+      <div class="hint" id="autoIpInfo"></div>
 
       <div class="row" style="margin-top:8px;"><button class="btn dark" onclick="saveAccess()">บันทึกการล็อก</button></div>
       <div class="status" id="accessStatus"></div>
@@ -1469,6 +1472,7 @@
     $("reqLogin").disabled = !j.has_login;
     if (!j.has_login) setMsg("accessStatus", "ตัวเลือก \"มือถือส่วนตัว\" และ \"เครื่องกลางร้าน\" ต้องรันไฟล์ 0007_staff_login.sql ใน Supabase ก่อน");
     $("reqIp").checked = !!j.require_ip;
+    $("autoIp").checked = !!(j.auto_ip && j.auto_ip.on);
     renderAccess();
   }
 
@@ -1493,6 +1497,9 @@
     });
     if (!a.allowed_ips.length) ipBox.appendChild(el("div", "hint", "ยังไม่มีเน็ตที่อนุญาต"));
     $("myIp").textContent = a.my_ip ? "เน็ตของเครื่องนี้: " + a.my_ip + (a.allowed_ips.includes(a.my_ip) ? " ✅" : "") : "";
+    const au = a.auto_ip || { ips: [] }, ai = $("autoIpInfo");
+    ai.textContent = !au.pos_key_on ? "⚠️ ยังไม่ได้ตั้งรหัส POS — ตั้งก่อน ระบบถึงจะอัปเดตเน็ตร้านให้ได้" :
+      au.on ? (au.ips.length ? "เห็นเน็ตร้านล่าสุด: " + au.ips.map(x => x.ip + " (" + fmt(x.at) + ")").join(" · ") : "ยังไม่มีสัญญาณจากเครื่อง POS ในร้าน") : "";
     const rej = $("ipRejected"); rej.innerHTML = "";
     if (a.rejected.length){
       rej.appendChild(el("div", "hint", "ถูกปฏิเสธล่าสุด (ถ้าเป็นเน็ตร้าน กดอนุญาต):"));
@@ -1580,7 +1587,7 @@
       approveRecent = n > 0 && confirm("อนุญาตเครื่องที่ใช้อยู่ตอนนี้ทั้งหมด (" + n + " เครื่อง ที่เปิดใน 30 วันล่าสุด) เลยไหม?\n\nตกลง = อนุญาตเลย พนักงานใช้ต่อได้ทันที\nยกเลิก = ต้องกดอนุญาตทีละเครื่อง");
     }
     const j = await api({ action: "save_access", admin_pin: adminPin, branch_id: branchId,
-      require_device: reqDevice, require_ip: reqIp, allowed_ips: access.allowed_ips, approve_recent: approveRecent,
+      require_device: reqDevice, require_ip: reqIp, allowed_ips: access.allowed_ips, approve_recent: approveRecent, auto_ip: $("autoIp").checked,
       ...(access.has_login ? { staff_login: reqLogin } : {}) });
     if (j && j.error === "need_migration_0007"){ setMsg("accessStatus", "ต้องรันไฟล์ 0007_staff_login.sql ใน Supabase ก่อน", false); return; }
     if (!j || !j.ok){ setMsg("accessStatus", j && j.error === "ip_needed" ? "ต่อ WiFi ร้านแล้วกด \"เพิ่มเน็ตที่ใช้อยู่ตอนนี้\" ก่อน" : errText(j), false); return; }

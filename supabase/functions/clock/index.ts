@@ -2827,6 +2827,7 @@ async function handleAccessSettings(p: Record<string, unknown>) {
     require_device: b.require_device, require_ip: b.require_ip, allowed_ips: b.allowed_ips ?? [],
     has_login: has0007, staff_login: !!(b as Record<string, unknown>).staff_login,
     my_ip: ipTag(String(p._ip ?? "")),
+    auto_ip: { ...autoOf(await getSetting<AutoIp>(AUTO_IP_KEY, {}), id), pos_key_on: !!(await getSetting<string | null>(POS_KEY, null)) },
     devices: (devices ?? []).map((d) => ({ ...d, code: deviceCode(d.device_id), device_id: undefined })),
     rejected,
   });
@@ -2840,6 +2841,11 @@ async function handleSaveAccess(p: Record<string, unknown>) {
   const row: Record<string, unknown> = { require_device: !!p.require_device, require_ip: !!p.require_ip, allowed_ips: ips };
   if (p.staff_login !== undefined) row.staff_login = !!p.staff_login;
   const { error } = await supabase.from("branches").update(row).eq("id", id);
+  if (!error && p.auto_ip !== undefined) {
+    const all = await getSetting<AutoIp>(AUTO_IP_KEY, {});
+    all[id] = { ...autoOf(all, id), on: !!p.auto_ip };
+    await setSetting(AUTO_IP_KEY, all);
+  }
   if (error) return json({ ok: false, error: p.staff_login ? "need_migration_0007" : "need_migration_0006" });
   let approved = 0;
   if (p.require_device && p.approve_recent) {
@@ -3399,6 +3405,44 @@ async function handlePosKeyStatus(p: Record<string, unknown>) {
   return json({ ok: true, on: !!(await getSetting<string | null>(POS_KEY, null)), devices: (await posSubs()).length });
 }
 
+// เน็ตร้านอัตโนมัติ: เครื่อง POS ในร้าน (มีรหัส POS) ส่งสัญญาณทุก 5 นาที → เลขเน็ตของเครื่องนั้นเข้ารายการ "เน็ตที่อนุญาต" ให้เอง
+// เลขที่ระบบเพิ่มเองและไม่เห็นอีกเกิน AUTO_IP_TTL จะถูกเอาออกเอง (เลขที่แอดมินใส่เองไม่ถูกแตะ)
+// ต้องตั้งรหัส POS ในหน้าแอดมินก่อนเสมอ ไม่งั้นใครก็เพิ่มเน็ตตัวเองได้
+const AUTO_IP_KEY = "auto_shop_ip", AUTO_IP_TTL = 24 * 3600 * 1000;
+type AutoIp = Record<string, { on?: boolean; ips?: Array<{ ip: string; at: string }> }>;
+const autoOf = (all: AutoIp, id: string) => ({ on: !!all[id]?.on, ips: (all[id]?.ips ?? []).slice(0, 5) });
+async function handlePosShopIp(p: Record<string, unknown>) {
+  if (!(await getSetting<string | null>(POS_KEY, null))) return json({ ok: false, error: "need_pos_key_setup" });
+  { const g = await posGate(p); if (g) return g; }
+  const tag = ipTag(String(p._ip ?? ""));
+  if (!tag) return json({ ok: false, error: "no_ip" });
+  const all = await getSetting<AutoIp>(AUTO_IP_KEY, {});
+  const ids = Object.keys(all).filter((id) => all[id]?.on);
+  if (!ids.length) return json({ ok: true, ip: tag, branches: 0 });
+  const now = Date.now(), nowIso = new Date(now).toISOString();
+  let dirty = false, added = 0;
+  for (const id of ids) {
+    const { data: b } = await supabase.from("branches").select("id, allowed_ips").eq("id", id).maybeSingle();
+    if (!b) continue;
+    const prev = all[id].ips ?? [];
+    const cur = prev.find((x) => x.ip === tag);
+    const ips = [{ ip: tag, at: nowIso }, ...prev.filter((x) => x.ip !== tag)];
+    const live = ips.filter((x, i) => i === 0 || now - Date.parse(x.at) <= AUTO_IP_TTL);
+    const keep = live.slice(0, 5);
+    const dropped = ips.filter((x) => !keep.includes(x)).map((x) => x.ip);
+    let allowed = ((b.allowed_ips ?? []) as string[]).filter((x) => !dropped.includes(x));
+    if (!allowed.includes(tag)) { allowed = [...allowed, tag].slice(-20); added++; }
+    if (allowed.length !== (b.allowed_ips ?? []).length || allowed.some((x, i) => x !== (b.allowed_ips ?? [])[i])) {
+      await supabase.from("branches").update({ allowed_ips: allowed }).eq("id", id);
+      await logAdmin("auto_ip", { branch: id, ip: tag, removed: dropped });
+    }
+    // เขียนเวลาที่เห็นล่าสุดไม่เกินชั่วโมงละครั้ง (ไม่ต้องเขียนทุก 5 นาที)
+    if (!cur || now - Date.parse(cur.at) > 3600 * 1000 || dropped.length) { all[id] = { on: true, ips: keep }; dirty = true; }
+  }
+  if (dirty) await setSetting(AUTO_IP_KEY, all);
+  return json({ ok: true, ip: tag, branches: ids.length, added });
+}
+
 // รายงานค่าแรงในหน้าเจ้าของร้าน POS (อ่านอย่างเดียว ต้องใช้รหัสแอดมิน):
 // รอบเงินเดือนที่ปิดแล้วซึ่งสิ้นสุดในช่วงวันที่ + เงินเบิกที่อนุมัติในช่วงวันที่ ทุกสาขา
 async function handlePosWages(p: Record<string, unknown>) {
@@ -3612,6 +3656,7 @@ const ACTIONS: Record<string, (p: Record<string, unknown>) => Promise<Response>>
   pos_key_status: handlePosKeyStatus,
   pos_wages: handlePosWages,
   pos_note_tr: handlePosNoteTr,
+  pos_shop_ip: handlePosShopIp,
 };
 
 Deno.serve(async (req) => {
