@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex">
+<meta name="theme-color" content="#7c2d12">
+<link rel="icon" type="image/png" sizes="32x32" href="icons/books-32.png">
+<link rel="apple-touch-icon" href="icons/books-180.png">
+<title>แก้ไขรายจ่าย</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@400;600;700&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#f6f1ea;--card:#fff;--tx:#1f2937;--mu:#6b7280;--bd:#e7ded3;--o:#9a3412;--g:#15803d;--g2:#dcfce7;--r:#b91c1c;--r2:#fee2e2;--y:#b45309;--y2:#fef3c7}
+*{box-sizing:border-box}html,body{margin:0;background:var(--bg);color:var(--tx);font:17px/1.5 Sarabun,system-ui,sans-serif;-webkit-text-size-adjust:100%}
+button,input,select{font:inherit;touch-action:manipulation}
+input,select{width:100%;padding:10px 12px;border:1px solid var(--bd);border-radius:12px;background:#fff;font-size:max(16px,1em);color:var(--tx)}
+button{cursor:pointer;border:1px solid var(--bd);background:#fff;color:var(--tx);border-radius:12px;padding:10px 14px}
+.top{position:sticky;top:0;z-index:5;background:#7c2d12;color:#fff;padding:12px 16px}.top h1{font-size:19px;margin:0}.top p{margin:2px 0 0;font-size:14px;opacity:.85}
+.wrap{max-width:560px;margin:0 auto;padding:12px 16px 120px}
+.it{background:var(--card);border:1px solid var(--bd);border-radius:16px;padding:14px;margin-top:12px}
+.it.ch{border-color:var(--y);box-shadow:0 0 0 2px var(--y2)}.it.del{opacity:.5}
+.hd{display:flex;gap:8px;align-items:center}.no{font-weight:700;font-size:20px;width:28px;flex:none}
+.hd input.nm{flex:1;font-weight:600}.hd input.pr{width:110px;flex:none;text-align:right;font-weight:600}
+.seg{display:flex;gap:8px;margin-top:10px}.seg button{flex:1;font-weight:700;padding:12px}
+.seg button.on.s{background:var(--g);border-color:var(--g);color:#fff}.seg button.on.p{background:#4b5563;border-color:#4b5563;color:#fff}
+.cats{display:flex;gap:8px;margin-top:10px}.cats>div{flex:1}.cats label{font-size:13px;color:var(--mu)}
+.ft{display:flex;justify-content:space-between;align-items:center;margin-top:10px;font-size:14px}
+.ft .gs{color:var(--y)}.ft .ok{color:var(--g)}.lnk{border:none;background:none;color:var(--r);padding:4px 0;font-size:14px}
+.bar{position:fixed;left:0;right:0;bottom:0;background:#fff;border-top:1px solid var(--bd);padding:12px 16px calc(12px + env(safe-area-inset-bottom))}
+.bar button{width:100%;max-width:560px;display:block;margin:0 auto;background:var(--g);border-color:var(--g);color:#fff;font-weight:700;font-size:18px;padding:14px}
+.bar button:disabled{background:#d1d5db;border-color:#d1d5db}
+.msg{text-align:center;padding:40px 16px}.msg h2{margin:0 0 6px}.mu{color:var(--mu)}
+.toast{position:fixed;left:50%;bottom:96px;transform:translateX(-50%);background:#111827;color:#fff;padding:10px 16px;border-radius:12px;font-size:15px;display:none;max-width:90vw}
+</style>
+</head>
+<body>
+<div class="top"><h1>✏️ แก้ไขรายจ่าย</h1><p id="sub">กำลังโหลด…</p></div>
+<div class="wrap" id="app"></div>
+<div class="bar" id="bar" style="display:none"><button id="save" onclick="save()" disabled>ไม่มีอะไรเปลี่ยน</button></div>
+<div class="toast" id="toast"></div>
+<script>
+const API = 'https://anzpzgvlexeeitmwpxpw.supabase.co/functions/v1/books', KEY = 'sb_publishable_vGq8fukQvgOkjgmcj1P0dw_PUQIbeAb';
+const T = new URLSearchParams(location.search).get('t') || '';
+const TH_M = ['ม.ค.','ก.พ.','มี.ค.','เม.ย.','พ.ค.','มิ.ย.','ก.ค.','ส.ค.','ก.ย.','ต.ค.','พ.ย.','ธ.ค.'];
+let ORIG = [], ROWS = [], CATS = [];
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const dTh = d => d ? `${+d.slice(8)} ${TH_M[+d.slice(5, 7) - 1]}` : '';
+const baht = n => '฿' + Number(n || 0).toLocaleString('th-TH', {maximumFractionDigits: 2});
+function toast(t) { const e = $('#toast'); e.textContent = t; e.style.display = 'block'; clearTimeout(toast.h); toast.h = setTimeout(() => e.style.display = 'none', 2500); }
+async function api(action, p = {}) {
+  const r = await fetch(API, {method: 'POST', headers: {'Content-Type': 'application/json', Authorization: 'Bearer ' + KEY, apikey: KEY}, body: JSON.stringify({action, t: T, ...p})});
+  return r.json();
+}
+const mains = () => [...new Set(CATS.map(c => c.main))];
+const subsOf = m => CATS.filter(c => c.main === m && c.sub && c.sub !== m).map(c => c.sub);
+function changed(r, o) {
+  const c = {};
+  if (r.del) return {del: true};
+  if (r.item !== o.item) c.item = r.item;
+  if (Number(r.amount) !== Number(o.amount)) c.amount = r.amount;
+  if (r.personal !== o.personal) c.personal = r.personal;
+  if (r.main !== o.main || r.sub !== o.sub) { c.main = r.main; c.sub = r.sub; }
+  return Object.keys(c).length ? c : null;
+}
+function draw() {
+  const dates = [...new Set(ROWS.map(r => r.date))];
+  $('#sub').textContent = `วันที่ ${dates.map(dTh).join(', ')} · ${ROWS.length} รายการ · แก้เฉพาะข้อที่ผิด`;
+  $('#app').innerHTML = ROWS.map((r, i) => {
+    const o = ORIG[i], ch = changed(r, o), subs = subsOf(r.main), ms = mains();
+    if (r.sub && r.sub !== r.main && !subs.includes(r.sub)) subs.unshift(r.sub);
+    if (r.main && !ms.includes(r.main)) ms.push(r.main);
+    const st = r.personal ? '' : !r.main ? '<span class="gs">⚠️ ยังไม่มีหมวด เลือกด้านบน</span>' : o.status === 'review' && r.main === o.main && r.sub === o.sub ? '<span class="gs">ระบบเดาหมวดนี้ ถ้าผิดเปลี่ยนได้</span>' : '<span class="ok">✓ หมวดนี้</span>';
+    return `<div class="it${ch ? ' ch' : ''}${r.del ? ' del' : ''}">
+      <div class="hd"><span class="no">${i + 1}.</span><input class="nm" value="${esc(r.item)}" ${r.del ? 'disabled' : ''} onchange="setv(${i},'item',this.value.trim()||ORIG[${i}].item)"><input class="pr" type="number" inputmode="decimal" value="${esc(r.amount)}" ${r.del ? 'disabled' : ''} onchange="setv(${i},'amount',this.value===''?ORIG[${i}].amount:+this.value)"></div>
+      ${r.del ? '' : `<div class="seg"><button class="s${r.personal ? '' : ' on'}" onclick="setv(${i},'personal',false)">🏪 ของร้าน</button><button class="p${r.personal ? ' on' : ''}" onclick="setv(${i},'personal',true)">👤 ส่วนตัว</button></div>
+      ${r.personal ? '' : `<div class="cats"><div><label>หมวดหลัก</label><select onchange="setMain(${i},this.value)"><option value="">— เลือก —</option>${ms.map(m => `<option${m === r.main ? ' selected' : ''}>${esc(m)}</option>`).join('')}</select></div>
+        ${subs.length ? `<div><label>หมวดรอง</label><select onchange="setv(${i},'sub',this.value)">${subs.map(s => `<option${s === r.sub ? ' selected' : ''}>${esc(s)}</option>`).join('')}</select></div>` : ''}</div>`}`}
+      <div class="ft"><span>${st}</span><button class="lnk" onclick="setv(${i},'del',${!r.del})">${r.del ? '↩︎ เอากลับ' : '🗑 ลบข้อนี้'}</button></div>
+    </div>`;
+  }).join('') + '<p class="mu" style="font-size:14px;margin-top:16px">ข้อที่ไม่ได้แก้ ไม่ต้องทำอะไร ระบบบันทึกไว้แล้ว</p>';
+  const n = ROWS.filter((r, i) => changed(r, ORIG[i])).length, b = $('#save');
+  b.disabled = !n; b.textContent = n ? `💾 บันทึก (แก้ ${n} ข้อ)` : 'ไม่มีอะไรเปลี่ยน';
+  $('#bar').style.display = 'block';
+}
+function setv(i, k, v) { ROWS[i][k] = v; draw(); }
+function setMain(i, m) { const s = subsOf(m); ROWS[i].main = m; ROWS[i].sub = s.includes(ROWS[i].sub) ? ROWS[i].sub : (s[0] || (CATS.some(c => c.main === m && c.sub === m) ? m : '')); draw(); }
+async function save() {
+  const rows = ROWS.map((r, i) => { const c = changed(r, ORIG[i]); return c && {id: r.id, ...c}; }).filter(Boolean);
+  if (!rows.length) return;
+  const b = $('#save'); b.disabled = true; b.textContent = 'กำลังบันทึก…';
+  try {
+    const r = await api('card_save', {rows});
+    if (!r.ok) { toast(r.error === 'link_expired' ? 'ลิงก์หมดอายุแล้ว (เกิน 7 วัน)' : 'บันทึกไม่ได้ ลองใหม่'); return draw(); }
+    load(r.rows); toast('✅ บันทึกแล้ว ปิดหน้านี้ได้เลย');
+  } catch (e) { toast('เชื่อมต่อไม่ได้ ลองใหม่'); draw(); }
+}
+function load(rows) { ORIG = rows.map(r => ({...r, amount: Number(r.amount), personal: !!r.personal, main: r.main || '', sub: r.sub || ''})); ROWS = ORIG.map(r => ({...r})); draw(); }
+(async () => {
+  try {
+    const r = T ? await api('card_get') : {ok: false, error: 'link_expired'};
+    if (!r.ok) { $('#sub').textContent = ''; $('#app').innerHTML = `<div class="msg"><h2>ลิงก์นี้ใช้ไม่ได้แล้ว</h2><p class="mu">ลิงก์แก้ไขใช้ได้ 7 วันหลังส่งรายการ<br>ถ้าต้องแก้รายการเก่า บอกเจ้าของร้าน</p></div>`; return; }
+    CATS = r.categories || [];
+    if (!r.rows.length) { $('#sub').textContent = ''; $('#app').innerHTML = '<div class="msg"><h2>ไม่มีรายการแล้ว</h2><p class="mu">รายการในการ์ดนี้ถูกลบไปหมดแล้ว</p></div>'; return; }
+    load(r.rows);
+  } catch (e) { $('#app').innerHTML = '<div class="msg"><h2>เชื่อมต่อไม่ได้</h2><p class="mu">ลองเปิดใหม่อีกครั้ง</p></div>'; }
+})();
+</script>
+</body>
+</html>
