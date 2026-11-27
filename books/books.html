@@ -48,6 +48,9 @@ label{display:block;font-size:14px;color:var(--mu);margin:10px 0 4px}.ck{display
 .set-row{display:flex;gap:6px;align-items:center;padding:6px 0;border-bottom:1px solid #f0e9df}.set-row>*{flex:1}
 @media(max-width:600px){.day-h{top:48px}.kp b{font-size:19px}}
 body.embed .day-h{top:0}
+.tip{position:fixed;z-index:50;display:none;background:#1f2937;color:#fff;border-radius:12px;padding:10px 12px;font-size:14px;line-height:1.45;min-width:190px;max-width:min(300px,90vw);box-shadow:0 8px 24px rgba(0,0,0,.25);pointer-events:none}
+.tip .th{font-weight:700;margin-bottom:4px;border-bottom:1px solid rgba(255,255,255,.15);padding-bottom:4px}.tip .tr{display:flex;justify-content:space-between;gap:14px}.tip .tr span{color:#d1d5db}.tip b.pos{color:#4ade80}.tip b.neg{color:#f87171}.tip b.warn{color:#fbbf24}.tip small{color:#d1d5db;font-weight:400}
+.vb-c{cursor:pointer;border-radius:6px}.vb-c.tipon{background:rgba(154,52,18,.08)}.vb-c:hover{background:rgba(154,52,18,.05)}
 </style>
 </head>
 <body>
@@ -117,15 +120,46 @@ function calc(d) {
   const byMain = {}; shop.forEach(r => { const k = r.main || 'ยังไม่ระบุหมวด'; (byMain[k] = byMain[k] || {a: 0, subs: {}}).a += Number(r.amount); byMain[k].subs[r.sub || '-'] = (byMain[k].subs[r.sub || '-'] || 0) + Number(r.amount); });
   if (left) { (byMain['วัตถุดิบ'] = byMain['วัตถุดิบ'] || {a: 0, subs: {}}).a += left; byMain['วัตถุดิบ'].subs['ตลาด–ไม่ระบุรายการ'] = (byMain['วัตถุดิบ'].subs['ตลาด–ไม่ระบุรายการ'] || 0) + left; }
   const days = {}; for (let x = d.from || S.cyc.start; x <= (d.to || S.cyc.end); x = addD(x, 1)) days[x] = {inc: 0, exp: 0};
-  d.income.forEach(i => { if (days[i.date]) days[i.date].inc += Number(i.pos_net) + Number(i.other); });
-  shop.forEach(r => { if (days[r.date]) days[r.date].exp += Number(r.amount); });
-  d.trips.forEach(t => { if (days[t.date]) days[t.date].exp += tripLeft(t); });
+  d.income.forEach(i => { const x = days[i.date]; if (x) { x.inc += Number(i.pos_net) + Number(i.other); x.pos = (x.pos || 0) + Number(i.pos_net); x.oth = (x.oth || 0) + Number(i.other); x.bills = (x.bills || 0) + Number(i.pos_bills || 0); x.gp = (x.gp || 0) + Number(i.gp || 0); } });
+  shop.forEach(r => { const x = days[r.date]; if (x) { x.exp += Number(r.amount); x.n = (x.n || 0) + 1; if ((r.main || '').includes('วัตถุดิบ')) x.mat = (x.mat || 0) + Number(r.amount); } });
+  d.trips.forEach(t => { const x = days[t.date]; if (x) { x.exp += tripLeft(t); x.mkt = (x.mkt || 0) + tripLeft(t); x.mat = (x.mat || 0) + tripLeft(t); } });
   // ค่าแรงพนักงานจากระบบตอกบัตร (ตามวันที่ทำงานจริง) — นับเข้ารายจ่าย หมวด ค่าแรง
   const f = d.from || S.cyc.start, t2 = d.to || S.cyc.end; let wage = 0;
-  Object.entries((d.wages && d.wages.days) || {}).forEach(([k, v]) => { if (k >= f && k <= t2) { wage += Number(v); if (days[k]) days[k].exp += Number(v); } });
+  Object.entries((d.wages && d.wages.days) || {}).forEach(([k, v]) => { if (k >= f && k <= t2) { wage += Number(v); if (days[k]) { days[k].exp += Number(v); days[k].wage = (days[k].wage || 0) + Number(v); } } });
   if (wage) { (byMain['ค่าแรง'] = byMain['ค่าแรง'] || {a: 0, subs: {}}).a += wage; byMain['ค่าแรง'].subs['พนักงาน (ระบบตอกบัตร)'] = (byMain['ค่าแรง'].subs['พนักงาน (ระบบตอกบัตร)'] || 0) + wage; }
   return {exp: exp + wage, wage, inc, left, tripTot, per: per.reduce((a, r) => a + Number(r.amount), 0), byMain, days, tripLeft, gp: d.income.reduce((a, i) => a + Number(i.gp || 0), 0), review: d.rows.filter(r => r.status === 'review' && !r.personal).length};
 }
+
+/* ---------- ป้ายตัวเลขบนกราฟ: เมาส์ชี้ = ขึ้น · มือถือ/แท็บเล็ต จิ้ม = ขึ้น จิ้มที่อื่น = ปิด ---------- */
+const tl = (k, v, cls) => `<div class="tr"><span>${k}</span><b${cls ? ` class="${cls}"` : ''}>${v}</b></div>`;
+function tipDay(d, v) {
+  const p = v.inc - v.exp;
+  return `<div class="th">${dTh(d)} ${new Date(d + 'T12:00:00Z').getFullYear()} · ${WD[new Date(d + 'T12:00:00Z').getUTCDay()]}</div>`
+    + tl('รายรับ', baht(v.inc), 'pos') + (v.pos ? tl('&nbsp;· ขาย POS', baht(v.pos) + (v.bills ? ` <small>(${v.bills} บิล)</small>` : '')) : '') + (v.oth ? tl('&nbsp;· รายรับอื่น', baht(v.oth)) : '') + (v.gp ? tl('&nbsp;· ค่า GP ที่โดนหัก', baht(v.gp)) : '')
+    + tl('รายจ่าย', baht(v.exp), 'warn') + (v.mat ? tl('&nbsp;· วัตถุดิบ', baht(v.mat)) : '') + (v.mkt ? tl('&nbsp;&nbsp;(ตลาดไม่ระบุ', baht(v.mkt) + ')') : '') + (v.wage ? tl('&nbsp;· ค่าแรงพนักงาน', baht(v.wage)) : '') + (v.n ? tl('&nbsp;· รายการที่จด', v.n + ' รายการ') : '')
+    + tl(p >= 0 ? 'เหลือ' : 'ขาด', baht(Math.abs(p)), p >= 0 ? 'pos' : 'neg');
+}
+function tipCycle(m) {
+  const c = m.c, p = c.inc - c.exp, mat = (c.byMain['วัตถุดิบ'] || {a: 0}).a, lab = (c.byMain['ค่าแรง'] || {a: 0}).a;
+  const top = Object.entries(c.byMain).sort((a, b) => b[1].a - a[1].a).slice(0, 3);
+  return `<div class="th">รอบ ${dTh(m.s)} – ${dTh(m.e)}</div>` + tl('รายรับ', baht(c.inc), 'pos') + tl('รายจ่าย', baht(c.exp), 'warn')
+    + top.map(([k, v]) => tl('&nbsp;· ' + esc(k), baht(v.a))).join('') + tl(p >= 0 ? 'กำไร' : 'ขาดทุน', baht(Math.abs(p)) + (c.inc ? ` <small>(${(p / c.inc * 100).toFixed(0)}%)</small>` : ''), p >= 0 ? 'pos' : 'neg')
+    + (c.inc && mat ? tl('วัตถุดิบ / ยอดขาย', (mat / c.inc * 100).toFixed(0) + '%') : '') + (c.inc && lab ? tl('ค่าแรง / ยอดขาย', (lab / c.inc * 100).toFixed(0) + '%') : '');
+}
+let TIP = null, TIPON = null;
+function showTip(el) {
+  if (!TIP) { TIP = document.createElement('div'); TIP.className = 'tip'; document.body.appendChild(TIP); }
+  if (TIPON && TIPON !== el) TIPON.classList.remove('tipon');
+  TIPON = el; el.classList.add('tipon'); TIP.innerHTML = el.dataset.tip; TIP.style.display = 'block';
+  const r = el.getBoundingClientRect(), w = TIP.offsetWidth, h = TIP.offsetHeight, vw = document.documentElement.clientWidth;
+  let x = r.left + r.width / 2 - w / 2; x = Math.max(8, Math.min(vw - w - 8, x));
+  let y = r.top - h - 8; if (y < 8) y = Math.min(window.innerHeight - h - 8, r.bottom + 8);
+  TIP.style.left = x + 'px'; TIP.style.top = y + 'px';
+}
+function hideTip() { if (TIP) TIP.style.display = 'none'; if (TIPON) TIPON.classList.remove('tipon'); TIPON = null; }
+document.addEventListener('pointerover', e => { if (e.pointerType !== 'mouse') return; const el = e.target.closest && e.target.closest('[data-tip]'); el ? showTip(el) : (TIPON && hideTip()); });
+document.addEventListener('click', e => { const el = e.target.closest && e.target.closest('[data-tip]'); if (el) { if (TIPON === el && e.pointerType !== 'mouse') hideTip(); else showTip(el); } else hideTip(); });
+addEventListener('scroll', () => TIPON && hideTip(), {passive: true, capture: true});
 
 /* ---------- ภาพรวม ---------- */
 function vSum() {
@@ -150,7 +184,7 @@ function vSum() {
     ${S.d.review_all ? `<div class="kp warn" onclick="S.tab='list';S.filter='review';draw()"><span>⚠️ รอตรวจหมวด</span><b>${S.d.review_all} รายการ</b><small>กดเพื่อตรวจ</small></div>` : ''}
   </div>
   <div class="card"><h3>สรุปสั้น ๆ</h3><ul class="tips">${tips.map(t => `<li>${t}</li>`).join('')}</ul></div>
-  <div class="card"><h3>รายรับ เทียบ รายจ่าย รายวัน</h3><div class="vb">${ds.map(([d, v]) => `<div class="vb-c" title="${dTh(d)} รับ ${baht(v.inc)} จ่าย ${baht(v.exp)}"><div class="bars"><i style="height:${v.inc / mx * 100}%;background:var(--g)"></i><i style="height:${v.exp / mx * 100}%;background:#f59e0b"></i></div><small>${+d.slice(8)}</small></div>`).join('')}</div>
+  <div class="card"><h3>รายรับ เทียบ รายจ่าย รายวัน</h3><div class="vb">${ds.map(([d, v]) => `<div class="vb-c" data-tip="${esc(tipDay(d, v))}"><div class="bars"><i style="height:${v.inc / mx * 100}%;background:var(--g)"></i><i style="height:${v.exp / mx * 100}%;background:#f59e0b"></i></div><small>${+d.slice(8)}</small></div>`).join('')}</div>
   <div class="lg"><span><i style="background:var(--g)"></i>รายรับ</span><span><i style="background:#f59e0b"></i>รายจ่าย</span></div></div>
   <div class="card"><h3>รายจ่ายแยกหมวด</h3><div class="hb">${mains.map(([k, v]) => `<details><summary style="list-style:none;cursor:pointer"><div class="hb-t"><b>${esc(k)}</b><span>${baht(v.a)} <small class="mu">${c.exp ? (v.a / c.exp * 100).toFixed(0) : 0}%</small></span></div><i style="width:${v.a / (top ? top[1].a : 1) * 100}%"></i></summary>
     <table class="t" style="margin:6px 0 4px">${Object.entries(v.subs).sort((a, b) => b[1] - a[1]).map(([s, a]) => `<tr><td>${esc(s)}</td><td class="r">${baht(a)}</td></tr>`).join('')}</table></details>`).join('') || '<p class="mu">ยังไม่มีรายจ่ายในรอบนี้</p>'}</div><p class="mu sm" style="margin:8px 0 0">กดที่หมวดเพื่อดูหมวดย่อย</p></div>
@@ -180,7 +214,7 @@ async function loadYear() {
 }
 function yearTable() {
   const y = S.year, mx = Math.max(1, ...y.map(m => Math.max(m.c.inc, m.c.exp))), ytd = y.filter(m => m.s.slice(0, 4) === S.cyc.end.slice(0, 4)).reduce((a, m) => a + m.c.inc, 0);
-  return `<div class="card"><h3>รายรับ เทียบ รายจ่าย รายเดือน</h3><div class="vb">${y.map(m => `<div class="vb-c" title="${dTh(m.s)}: รับ ${baht(m.c.inc)} จ่าย ${baht(m.c.exp)}"><div class="bars"><i style="height:${m.c.inc / mx * 100}%;background:var(--g)"></i><i style="height:${m.c.exp / mx * 100}%;background:#f59e0b"></i></div><small>${TM[+m.s.slice(5, 7) - 1]}</small></div>`).join('')}</div><div class="lg"><span><i style="background:var(--g)"></i>รายรับ</span><span><i style="background:#f59e0b"></i>รายจ่าย</span></div></div>
+  return `<div class="card"><h3>รายรับ เทียบ รายจ่าย รายเดือน</h3><div class="vb">${y.map(m => `<div class="vb-c" data-tip="${esc(tipCycle(m))}"><div class="bars"><i style="height:${m.c.inc / mx * 100}%;background:var(--g)"></i><i style="height:${m.c.exp / mx * 100}%;background:#f59e0b"></i></div><small>${TM[+m.s.slice(5, 7) - 1]}</small></div>`).join('')}</div><div class="lg"><span><i style="background:var(--g)"></i>รายรับ</span><span><i style="background:#f59e0b"></i>รายจ่าย</span></div></div>
   <div class="card ovx"><table class="t"><tr><th>รอบ</th><th class="r">รายรับ</th><th class="r">รายจ่าย</th><th class="r">กำไร</th><th class="r">%</th><th class="r">วัตถุดิบ</th><th class="r">ตลาดไม่ระบุ</th></tr>
   ${y.slice().reverse().map(m => { const p = m.c.inc - m.c.exp, mat = (m.c.byMain['วัตถุดิบ'] || {a: 0}).a; return `<tr><td style="white-space:nowrap">${dTh(m.s)}–${dTh(m.e)}</td><td class="r">${kf(m.c.inc)}</td><td class="r">${kf(m.c.exp)}</td><td class="r b ${p >= 0 ? 'pos' : 'neg'}">${kf(p)}</td><td class="r">${m.c.inc ? (p / m.c.inc * 100).toFixed(0) + '%' : '—'}</td><td class="r">${m.c.inc ? (mat / m.c.inc * 100).toFixed(0) + '%' : kf(mat)}</td><td class="r">${m.c.left ? kf(m.c.left) : '—'}</td></tr>`; }).join('')}</table>
   <p class="mu sm">วัตถุดิบ = % ของรายรับ (ถ้ายังไม่มีรายรับ แสดงเป็นบาท) · รายรับก่อนเริ่มใช้ POS จะว่าง</p></div>
@@ -314,7 +348,9 @@ async function runPending() {
   const L = $('#impLog'); L.innerHTML = 'กำลังดึง…';
   const r = await api('import_pending', {sheet_id: sheetId($('#sh2').value)});
   if (!r.ok) { L.innerHTML = `<span class="neg">ดึงไม่ได้: ${esc(r.error)}</span>${r.sa ? `<br>ให้แชร์ Sheet CONFIG ให้ <b>${esc(r.sa)}</b> (ผู้มีสิทธิ์อ่าน)` : ''}`; return; }
-  L.innerHTML = r.n || r.trips ? `✅ ดึงมา ${r.n} รายการ${r.trips ? ` · รอบตลาด ${r.trips} รอบ` : ''} · ร้าน ${baht(r.sum)}${r.from ? ` · ${dTh(r.from)}–${dTh(r.to)}` : ''}<br>ไปที่ 🧾 รายการรายจ่าย › ⚠️ รอตรวจ แล้วกด ‹ ย้อนรอบเพื่อตรวจทีละรอบ` : '✅ ไม่มีรายการค้างแล้ว';
+  const st = r.stats || {};
+  L.innerHTML = (r.n || r.trips ? `✅ ดึงมา ${r.n} รายการ${r.trips ? ` · รอบตลาด ${r.trips} รอบ` : ''} · ร้าน ${baht(r.sum)}${r.from ? ` · ${dTh(r.from)}–${dTh(r.to)}` : ''}<br>ไปที่ 🧾 รายการรายจ่าย › ⚠️ รอตรวจ แล้วกด ‹ ย้อนรอบเพื่อตรวจทีละรอบ` : '✅ ไม่มีรายการค้างแล้ว')
+    + `<br><small class="mu">RAW_OCR ${st.rows ?? '?'} แถว · มีในบัญชีแล้ว ${st.in_ledger ?? 0} · ดึงไปก่อนหน้านี้ ${st.already ?? 0}${st.no_date ? ` · <b class="neg">วันที่อ่านไม่ได้ ${st.no_date}</b> (เช่น ${esc((st.bad_dates || []).join(', '))})` : ''}${st.trip_old ? ` · ยอดตลาดวันที่มีในแท็บเดือนแล้ว ${st.trip_old} (ไม่ดึง)` : ''} · วันที่ล่าสุดใน RAW_OCR ${st.last_date ? dTh(st.last_date) + ' ' + st.last_date.slice(0, 4) : '-'}</small>`;
   const d = await api('range', {from: S.cyc.start, to: S.cyc.end}); S.d = d;
 }
 async function runImport() {
