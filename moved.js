@@ -1,8 +1,8 @@
-// ย้ายเว็บไปที่อยู่ใหม่ (เช่น Netlify): ใส่ที่อยู่ใหม่ใน NEW_HOME แล้วเว็บเดิมบน github.io
+// ย้ายเว็บไปที่อยู่ใหม่: เว็บเดิม (github.io / netlify.app) ขึ้นแถบบอกพร้อมปุ่มพาไปหน้าเดียวกันบน NEW_HOME
 // จะขึ้นแถบบอกพร้อมปุ่มพาไปหน้าเดียวกัน รหัสสาขาที่เครื่องจำไว้ติดไปด้วย ไม่ต้องวางลิงก์ใหม่
 (function(){
-  var NEW_HOME = ""; // เช่น "https://rosjana-clock.netlify.app/"
-  if (!NEW_HOME || !/github\.io$/.test(location.hostname)) return;
+  var NEW_HOME = "https://rosjana-clock.web.app/";
+  if (!NEW_HOME || !/(github\.io|netlify\.app)$/.test(location.hostname)) return;
   var page = location.pathname.split("/").pop() || "index.html";
   var url = new URL(page, NEW_HOME);
   url.search = location.search;

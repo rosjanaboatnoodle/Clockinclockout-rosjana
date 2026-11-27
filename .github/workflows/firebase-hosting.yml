@@ -1,0 +1,17 @@
+# merge แล้วขึ้นเว็บ Firebase Hosting เอง (rosjana-clock.web.app: ระบบตอกบัตร) — ต้องตั้ง Secret FIREBASE_SERVICE_ACCOUNT ใน GitHub ก่อน
+name: Deploy to Firebase Hosting
+on:
+  push:
+    branches: [claude/magical-hopper-wi9me6]
+  workflow_dispatch:
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: FirebaseExtended/action-hosting-deploy@v0
+        with:
+          repoToken: ${{ secrets.GITHUB_TOKEN }}
+          firebaseServiceAccount: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          channelId: live
+          projectId: rosjana-pos
